@@ -1,4 +1,4 @@
-<img src="assets/screenshoot.png" />
+<img src="assets/screenshot.png" />
 
 # Island
 
