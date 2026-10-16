@@ -4,10 +4,10 @@
 use macroquad::prelude::*;
 
 use crate::building::{self, Structure, StructureKind};
-use crate::combat::Projectile;
 use crate::creatures::{Creature, Species, State, Temperament};
 use crate::items::ItemId;
 use crate::player::{Player, SWING_TIME};
+use crate::protocol::PopupStyle;
 use crate::rng::hash2;
 use crate::ui::draw_item_icon;
 use crate::world::{BagKind, GroundBag, NodeKind, ResourceNode, TILE, Tile, World};
@@ -121,19 +121,44 @@ enum Drawable<'a> {
     Bag(&'a GroundBag),
     Structure(&'a Structure),
     Creature(&'a Creature),
-    Player(&'a Player),
+    Avatar(&'a Avatar<'a>),
+}
+
+/// Um personagem a desenhar (o próprio jogador ou outro na partida).
+pub struct Avatar<'a> {
+    pub player: &'a Player,
+    pub held: Option<ItemId>,
+    /// `id` da criatura montada.
+    pub mount: Option<u32>,
+    pub shirt: Color,
+    /// Nome acima da cabeça (`None` para o próprio jogador).
+    pub name: Option<&'a str>,
+}
+
+/// Cor de camisa de cada jogador, pelo `id`.
+pub fn shirt_color(id: u32) -> Color {
+    const SHIRTS: [(u8, u8, u8); 6] = [
+        (196, 82, 58),
+        (58, 120, 196),
+        (70, 160, 90),
+        (200, 160, 50),
+        (150, 80, 180),
+        (60, 170, 170),
+    ];
+    let (r, g, b) = SHIRTS[(id as usize).saturating_sub(1) % SHIRTS.len()];
+    Color::from_rgba(r, g, b, 255)
 }
 
 /// Tudo o que aparece no mundo (y-sort) num frame.
 pub struct Scene<'a> {
     pub world: &'a World,
     pub creatures: &'a [Creature],
-    pub projectiles: &'a [Projectile],
-    /// `None` enquanto o jogador está morto.
-    pub player: Option<&'a Player>,
-    pub held: Option<ItemId>,
-    /// `id` da criatura que o jogador está montando.
-    pub mount: Option<u32>,
+    /// Pedras em voo.
+    pub projectiles: &'a [Vec2],
+    /// Personagens vivos.
+    pub avatars: &'a [Avatar<'a>],
+    /// Posição do jogador local (copas de árvore ficam translúcidas quando ele está atrás).
+    pub local: Option<Vec2>,
     /// Anel de destaque do alvo atual: (posição, raio).
     pub ring: Option<(Vec2, f32)>,
     pub view: Rect,
@@ -153,9 +178,7 @@ pub fn draw_entities(scene: &Scene) {
     let Scene {
         world,
         creatures,
-        player,
-        held,
-        mount,
+        avatars,
         view,
         time,
         ..
@@ -164,7 +187,7 @@ pub fn draw_entities(scene: &Scene) {
         draw_ellipse_lines(pos.x, pos.y, r, r * 0.45, 0.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.7));
     }
 
-    let player_pos = player.map_or(vec2(f32::MIN, f32::MIN), |p| p.pos);
+    let player_pos = scene.local.unwrap_or(vec2(f32::MIN, f32::MIN));
     let margin = view.w.max(view.h) * 0.1 + 64.0;
     let culled = Rect::new(
         view.x - margin,
@@ -198,10 +221,13 @@ pub fn draw_entities(scene: &Scene) {
             .filter(|c| culled.contains(c.pos))
             .map(|c| (c.pos.y, Drawable::Creature(c))),
     );
-    // Montado, o jogador é desenhado junto da montaria (logo depois dela).
-    if let Some(p) = player.filter(|_| mount.is_none()) {
-        list.push((p.pos.y, Drawable::Player(p)));
-    }
+    // Montado, o personagem é desenhado junto da montaria (logo depois dela).
+    list.extend(
+        avatars
+            .iter()
+            .filter(|a| a.mount.is_none())
+            .map(|a| (a.player.pos.y, Drawable::Avatar(a))),
+    );
     list.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     for (_, d) in list {
@@ -211,18 +237,16 @@ pub fn draw_entities(scene: &Scene) {
             Drawable::Structure(s) => draw_structure(s, time),
             Drawable::Creature(c) => {
                 draw_creature(c, time);
-                if mount == Some(c.id)
-                    && let Some(p) = player
-                {
-                    draw_player(p, held, saddle_height(c.species));
+                for rider in avatars.iter().filter(|a| a.mount == Some(c.id)) {
+                    draw_player(rider.player, rider.held, rider.shirt, saddle_height(c.species));
                 }
             }
-            Drawable::Player(p) => draw_player(p, held, 0.0),
+            Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, 0.0),
         }
     }
 
     for stone in scene.projectiles {
-        let (x, y) = (stone.pos.x, stone.pos.y);
+        let (x, y) = (stone.x, stone.y);
         draw_ellipse(x, y, 2.5, 1.0, 0.0, SHADOW);
         draw_circle(x, y - 14.0, 2.2, Color::from_rgba(150, 150, 158, 255));
     }
@@ -661,8 +685,26 @@ fn draw_pebbles(pos: Vec2, variant: u8) {
     }
 }
 
+/// Nomes dos outros jogadores (espaço de tela, acima da cabeça).
+pub fn draw_names(avatars: &[Avatar], camera: &Camera2D) {
+    for a in avatars {
+        let Some(name) = a.name else { continue };
+        let lift = if a.mount.is_some() { 58.0 } else { 42.0 };
+        let at = camera.world_to_screen(a.player.pos - vec2(0.0, lift));
+        let w = measure_text(name, None, 18, 1.0).width;
+        draw_rectangle(
+            at.x - w / 2.0 - 4.0,
+            at.y - 15.0,
+            w + 8.0,
+            20.0,
+            Color::new(0.0, 0.0, 0.0, 0.45),
+        );
+        draw_text(name, at.x - w / 2.0, at.y, 18.0, WHITE);
+    }
+}
+
 /// `seat`: altura da sela quando montado (0 = a pé).
-fn draw_player(p: &Player, held: Option<ItemId>, seat: f32) {
+fn draw_player(p: &Player, held: Option<ItemId>, shirt: Color, seat: f32) {
     let s = p.facing.sign();
     let mounted = seat > 0.0;
     let (x, y) = (p.pos.x, p.pos.y - seat);
@@ -674,7 +716,6 @@ fn draw_player(p: &Player, held: Option<ItemId>, seat: f32) {
     let bob = step.abs() * -1.5;
 
     let skin = Color::from_rgba(232, 186, 146, 255);
-    let shirt = Color::from_rgba(196, 82, 58, 255);
     let pants = Color::from_rgba(70, 64, 92, 255);
     let hair = Color::from_rgba(78, 50, 34, 255);
 
@@ -772,16 +813,6 @@ fn draw_held_item(item: ItemId, hand: Vec2, dir: Vec2) {
         }
         _ => {}
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PopupStyle {
-    /// Itens ganhos ("+3 Madeira").
-    Gain,
-    /// Dano causado numa criatura.
-    Damage,
-    /// Dano recebido pelo jogador.
-    Hurt,
 }
 
 /// Números flutuantes (“+3 Madeira”, “-22”). Desenhados em espaço de tela para texto nítido.

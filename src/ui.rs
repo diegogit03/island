@@ -10,6 +10,7 @@ use crate::daynight;
 use crate::inventory::{HOTBAR_SIZE, Inventory, Stack};
 use crate::items::ItemId;
 use crate::progression::{self, Attribute, Progression};
+use crate::protocol::{MAX_CHAT_LEN, SlotTarget};
 use crate::taming;
 use crate::vitals::Vitals;
 
@@ -35,24 +36,20 @@ const DIM: Color = Color::new(0.65, 0.65, 0.68, 1.0);
 const OK: Color = Color::new(0.55, 0.85, 0.50, 1.0);
 const BAD: Color = Color::new(0.95, 0.45, 0.40, 1.0);
 
+/// Estado só de interface (local ao cliente).
 #[derive(Default)]
 pub struct UiState {
     pub inventory_open: bool,
-    /// Pilha "presa" ao cursor enquanto o jogador reorganiza o inventário.
-    pub held: Option<Stack>,
-    /// Contêiner (baú, fogueira, dino) aberto junto com o inventário.
-    pub container: Option<ContainerRef>,
     pub hide_help: bool,
+    /// Digitando uma mensagem de chat.
+    pub chat_open: bool,
+    pub chat_input: String,
 }
 
-/// O que está aberto ao lado do inventário.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ContainerRef {
-    /// Índice em `world.structures`.
-    Structure(usize),
-    /// `id` da criatura.
-    Creature(u32),
-}
+/// Linha do chat: (de, texto, idade em segundos).
+pub type ChatLine = (String, String, f32);
+/// Por quanto tempo uma mensagem fica visível com o chat fechado.
+pub const CHAT_VISIBLE_SECS: f32 = 12.0;
 
 /// Tipo de painel de contêiner: define layout e botões.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +89,7 @@ pub enum ContainerView<'a> {
 }
 
 impl<'a> ContainerView<'a> {
-    fn kind(self) -> PanelKind {
+    pub fn kind(self) -> PanelKind {
         match self {
             ContainerView::Structure(s) if s.kind.process().is_some() => PanelKind::Campfire,
             ContainerView::Structure(_) => PanelKind::Storage,
@@ -101,7 +98,7 @@ impl<'a> ContainerView<'a> {
         }
     }
 
-    fn inventory(self) -> Option<&'a Inventory> {
+    pub fn inventory(self) -> Option<&'a Inventory> {
         match self {
             ContainerView::Structure(s) => s.storage.as_ref(),
             ContainerView::Creature(c) => c.inventory.as_ref(),
@@ -121,8 +118,14 @@ pub enum UiAction {
     Craft(usize),
     CancelCraft(usize),
     SelectHotbar(usize),
-    /// Pilha solta fora dos painéis: vai para o chão.
-    Drop(Stack),
+    /// Clique num slot (esquerdo/direito, com ou sem Shift).
+    Slot {
+        target: SlotTarget,
+        left: bool,
+        shift: bool,
+    },
+    /// Pilha do cursor solta fora dos painéis: vai para o chão.
+    DropHeld,
     /// Acender/apagar a fogueira aberta.
     ToggleFire,
     /// Alternar seguir/ficar do dino aberto.
@@ -137,6 +140,11 @@ pub enum UiAction {
 pub struct Hud<'a> {
     pub ui: &'a UiState,
     pub inventory: &'a Inventory,
+    /// Pilha presa no cursor (vem do servidor).
+    pub held: Option<Stack>,
+    pub chat: &'a [ChatLine],
+    /// Jogadores conectados (para o canto da tela).
+    pub online: usize,
     pub container: Option<ContainerView<'a>>,
     /// Montaria atual, para a barra de vida dela.
     pub mount: Option<&'a Creature>,
@@ -279,19 +287,16 @@ pub fn pointer_over_ui(ui: &UiState) -> bool {
     ui.inventory_open || hotbar_slots().iter().any(|r| r.contains(m))
 }
 
-/// Devolve ao inventário a pilha presa no cursor. Retorna o que não coube.
-pub fn return_held(ui: &mut UiState, inv: &mut Inventory) -> Option<Stack> {
-    ui.held.take().and_then(|stack| inv.insert_stack(stack))
-}
-
+/// Traduz cliques nos painéis em ações. Nada é alterado aqui: o servidor aplica as ações.
+/// `container`: (tipo, nº de slots) do contêiner aberto; `holding`: há pilha no cursor.
 pub fn handle_input(
-    ui: &mut UiState,
-    inv: &mut Inventory,
-    container: Option<(PanelKind, &mut Inventory)>,
-    queue: &CraftQueue,
+    ui: &UiState,
+    inv_slots: usize,
+    container: Option<(PanelKind, usize)>,
+    queue_len: usize,
+    holding: bool,
 ) -> Option<UiAction> {
-    let kind = container.as_ref().map(|c| c.0);
-    let mut chest = container.map(|c| c.1);
+    let kind = container.map(|c| c.0);
     let m = mouse();
     if !ui.inventory_open {
         if is_mouse_button_pressed(MouseButton::Left) {
@@ -303,21 +308,20 @@ pub fn handle_input(
         return None;
     }
 
-    let layout = panel_layout(
-        inv.slots.len(),
-        chest.as_ref().zip(kind).map(|(c, k)| (c.slots.len(), k)),
-        queue.jobs.len(),
-    );
+    let layout = panel_layout(inv_slots, container.map(|(k, n)| (n, k)), queue_len);
     let left = is_mouse_button_pressed(MouseButton::Left);
     let right = is_mouse_button_pressed(MouseButton::Right);
     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+    if !left && !right {
+        return None;
+    }
 
     if let Some(i) = layout.slots.iter().position(|r| r.contains(m)) {
-        match chest.as_deref_mut() {
-            Some(chest) if left && shift && ui.held.is_none() => transfer(&mut inv.slots[i], chest),
-            _ => slot_click(ui, &mut inv.slots[i], left, right),
-        }
-        return None;
+        return Some(UiAction::Slot {
+            target: SlotTarget::Inventory(i),
+            left,
+            shift,
+        });
     }
 
     match &layout.right {
@@ -328,18 +332,17 @@ pub fn handle_input(
             {
                 return Some(kind.buttons()[i]);
             }
-            if let (Some(chest), Some(i)) = (chest, slots.iter().position(|r| r.contains(m))) {
-                if left && shift && ui.held.is_none() {
-                    transfer(&mut chest.slots[i], inv);
-                } else {
-                    slot_click(ui, &mut chest.slots[i], left, right);
-                }
-                return None;
+            if let Some(i) = slots.iter().position(|r| r.contains(m)) {
+                return Some(UiAction::Slot {
+                    target: SlotTarget::Container(i),
+                    left,
+                    shift,
+                });
             }
         }
         RightLayout::Craft { recipes, queue, .. } => {
             if left
-                && ui.held.is_none()
+                && !holding
                 && let Some(i) = recipes.iter().position(|r| r.contains(m))
             {
                 return Some(UiAction::Craft(i));
@@ -355,70 +358,10 @@ pub fn handle_input(
     }
 
     let over_panel = layout.inv_panel.contains(m) || layout.right_panel.contains(m) || layout.char_panel.contains(m);
-    if left
-        && !over_panel
-        && let Some(stack) = ui.held.take()
-    {
-        return Some(UiAction::Drop(stack));
+    if left && !over_panel && holding {
+        return Some(UiAction::DropHeld);
     }
     None
-}
-
-fn slot_click(ui: &mut UiState, slot: &mut Option<Stack>, left: bool, right: bool) {
-    if left {
-        click_slot(ui, slot);
-    } else if right {
-        split_slot(ui, slot);
-    }
-}
-
-/// Shift+clique: move a pilha inteira para o outro inventário (o que não couber fica).
-fn transfer(slot: &mut Option<Stack>, to: &mut Inventory) {
-    if let Some(stack) = slot.take() {
-        *slot = to.insert_stack(stack);
-    }
-}
-
-/// Clique esquerdo: pegar, soltar, juntar ou trocar pilhas.
-fn click_slot(ui: &mut UiState, slot: &mut Option<Stack>) {
-    match (ui.held.take(), slot.take()) {
-        (None, s) => ui.held = s,
-        (Some(h), None) => *slot = Some(h),
-        (Some(mut h), Some(mut s)) if h.item == s.item && s.count < s.item.max_stack() => {
-            let moved = (s.item.max_stack() - s.count).min(h.count);
-            s.count += moved;
-            h.count -= moved;
-            *slot = Some(s);
-            ui.held = (h.count > 0).then_some(h);
-        }
-        (Some(h), Some(s)) => {
-            *slot = Some(h);
-            ui.held = Some(s);
-        }
-    }
-}
-
-/// Clique direito: pega metade da pilha (sem nada no cursor) ou solta 1 unidade.
-fn split_slot(ui: &mut UiState, slot: &mut Option<Stack>) {
-    match (&mut ui.held, slot.as_mut()) {
-        (None, Some(s)) if s.count > 1 => {
-            let half = s.count / 2;
-            s.count -= half;
-            ui.held = Some(Stack { count: half, ..*s });
-        }
-        (Some(h), None) => {
-            *slot = Some(Stack { count: 1, ..*h });
-            h.count -= 1;
-        }
-        (Some(h), Some(s)) if h.item == s.item && s.count < s.item.max_stack() => {
-            s.count += 1;
-            h.count -= 1;
-        }
-        _ => {}
-    }
-    if ui.held.is_some_and(|h| h.count == 0) {
-        ui.held = None;
-    }
 }
 
 // ---------- Desenho ----------
@@ -438,13 +381,14 @@ pub fn draw(hud: &Hud) {
         let a = (hud.hurt / 0.35).min(1.0) * 0.25;
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.8, 0.0, 0.0, a));
     }
-    draw_clock(hud.time);
+    draw_clock(hud.time, hud.online);
     draw_vitals(hud.vitals);
     draw_xp_bar(hud.progression);
     if let Some(mount) = hud.mount {
         draw_mount_bar(mount);
     }
     draw_messages(hud.messages);
+    draw_chat(hud.ui, hud.chat);
     if hud.ui.inventory_open {
         draw_panels(hud);
     } else {
@@ -458,18 +402,50 @@ fn shadowed(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(text, x, y, size, color);
 }
 
+/// Últimas mensagens de chat (esmaecem) e a caixa de digitação.
+fn draw_chat(ui: &UiState, chat: &[ChatLine]) {
+    let x = 16.0;
+    let base = screen_height() - 190.0;
+    let visible: Vec<&ChatLine> = chat
+        .iter()
+        .rev()
+        .filter(|(_, _, age)| ui.chat_open || *age < CHAT_VISIBLE_SECS)
+        .take(8)
+        .collect();
+    for (i, (from, text, age)) in visible.iter().enumerate() {
+        let alpha = if ui.chat_open {
+            1.0
+        } else {
+            (CHAT_VISIBLE_SECS - age).clamp(0.0, 1.0)
+        };
+        let y = base - i as f32 * 20.0;
+        let line = format!("{from}: {text}");
+        shadowed(&line, x, y, 18.0, Color::new(0.9, 0.95, 1.0, alpha));
+    }
+    if ui.chat_open {
+        let y = base + 24.0;
+        let w = 420.0;
+        draw_rectangle(x - 4.0, y - 18.0, w, 26.0, Color::new(0.0, 0.0, 0.0, 0.7));
+        let caret = if (get_time() * 2.0) as i64 % 2 == 0 { "_" } else { " " };
+        let text = format!("Dizer: {}{caret}", ui.chat_input);
+        draw_text(&text, x + 2.0, y, 18.0, TEXT);
+        let count = format!("{}/{MAX_CHAT_LEN}", ui.chat_input.chars().count());
+        draw_text(&count, x + w - 60.0, y, 16.0, DIM);
+    }
+}
+
 fn draw_help() {
     let lines = [
         "WASD: mover   Shift: correr   E / Clique: coletar ou beber   R / Botão dir.: comer",
         "F: interagir   Q: largar (Ctrl+Q: pilha)   Estrutura na mão: clique posiciona, X demole",
-        "1-6 / Roda: hotbar   Tab / I: inventário   F5: salvar   H: esconder ajuda",
+        "1-6 / Roda: hotbar   Tab / I: inventário   Enter: chat   F5: salvar   H: esconder ajuda",
     ];
     for (i, line) in lines.iter().enumerate() {
         shadowed(line, 12.0, 22.0 + i as f32 * 20.0, 20.0, TEXT);
     }
 }
 
-fn draw_clock(time: f32) {
+fn draw_clock(time: f32, online: usize) {
     let hour = daynight::hour(time);
     let label = format!(
         "Dia {}  {:02}:{:02}",
@@ -482,6 +458,11 @@ fn draw_clock(time: f32) {
     let x = screen_width() - w - 16.0;
     shadowed(&label, x, 30.0, size, TEXT);
     let (ix, iy) = (x - 16.0, 22.0);
+    if online > 1 {
+        let players = format!("{online} jogadores");
+        let pw = measure_text(&players, None, 18, 1.0).width;
+        shadowed(&players, ix - 24.0 - pw, 28.0, 18.0, OK);
+    }
     if daynight::darkness(hour) < 0.4 {
         draw_circle(ix, iy, 8.0, Color::new(1.0, 0.85, 0.3, 1.0));
     } else {
@@ -616,7 +597,7 @@ fn draw_panel(rect: Rect, title: &str) {
 }
 
 fn draw_panels(hud: &Hud) {
-    let (ui, inv) = (hud.ui, hud.inventory);
+    let inv = hud.inventory;
     let storage = hud.container.and_then(|c| c.inventory());
     let layout = panel_layout(
         inv.slots.len(),
@@ -719,7 +700,7 @@ fn draw_panels(hud: &Hud) {
         _ => {}
     }
 
-    if let Some(held) = ui.held {
+    if let Some(held) = hud.held {
         let r = Rect::new(m.x - SLOT / 2.0, m.y - SLOT / 2.0, SLOT, SLOT);
         draw_item_icon(held.item, r);
         draw_count(r, held.count);

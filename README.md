@@ -4,9 +4,9 @@
 
 > ⚠️ **Projeto experimental.** Island é um experimento pessoal de desenvolvimento de jogos em Rust, feito em boa parte com assistência de IA. Não é um produto acabado: a arte é provisória (desenhada com formas geométricas), o balanceamento é chute, saves podem quebrar entre versões e tudo pode mudar a qualquer momento.
 
-Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, sobreviva numa ilha e, no futuro, domestique dinossauros. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop, offline.
+Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, construa, domestique dinossauros e jogue com amigos na rede local. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop.
 
-## O que já tem (v0.6)
+## O que já tem (v0.7)
 
 - Ilha procedural com praia, água rasa e água funda
 - Coleta de madeira, palha, pedra, sílex e frutinhas
@@ -21,6 +21,7 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Progressão: XP, nível, pontos de atributo e engramas (receitas desbloqueadas por nível)
 - Montanha com metal, forja e ferramentas/espada de metal
 - Vida, comida, água e stamina; morte com bolsa de itens e respawn
+- **Multiplayer na rede local (LAN)**: hospede seu mundo ou entre no de um amigo; chat; servidor dedicado sem janela
 - Save automático em `saves/save.json`, relativo à pasta de onde o jogo é executado
 
 Os próximos passos estão no [ROADMAP.md](ROADMAP.md).
@@ -48,6 +49,19 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | F | Interagir: pegar itens, abrir porta/baú/fogueira, usar bancada, abrir dino (alimentar/comandar); montado: desmontar |
 | F5 | Salvar |
 | H | Mostrar/esconder ajuda |
+| Enter | Chat |
+| Esc | Fechar painel / pausa (voltar ao menu) |
+
+## Jogar com amigos (LAN)
+
+1. Quem vai hospedar abre o jogo e clica em **Hospedar na LAN**: é o mesmo mundo do "Um jogador", agora aberto para a rede.
+2. Os amigos (na mesma rede) abrem o jogo: o servidor aparece em **Jogos na rede local**. Se não aparecer, digitem o IP do host (mostrado no rodapé do menu dele) e cliquem em **Entrar**.
+3. Cada jogador é reconhecido pelo nome: quem sair e voltar com o mesmo nome continua de onde parou.
+
+Quando o host sai, a partida acaba para todos (o mundo é salvo no computador do host).
+
+- **Firewall:** na primeira vez que hospedar, o Windows pergunta se o Island pode usar a rede: permita em *redes privadas*. As portas são **7777/TCP** (jogo) e **7778/UDP** (descoberta na LAN).
+- **Servidor dedicado** (um PC só para o mundo, sem janela): `island --server`. Opções: `--port 7777`, `--save caminho/do/mundo.json`, `--name "Nome do servidor"`. O registro fica num `.log` ao lado do save; para encerrar, feche o processo (ele salva a cada 60 s e quando o último jogador sai).
 
 ## Rodar a partir do código
 

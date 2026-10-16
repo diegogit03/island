@@ -55,13 +55,17 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Saves antigos mantêm as receitas que já existiam liberadas
 - Movido para a v0.8: biomas de selva e pântano, cavernas
 
-## v0.7 — Multiplayer
-- Separar simulação de apresentação: estado do mundo num servidor autoritativo (headless) e cliente que só desenha e envia input
-- Rede (ex.: `renet`/`quinn`), sincronização de entidades com interpolação e predição do próprio jogador
-- Co-op online para poucos jogadores: entrar/sair, nomes, chat
-- Tribos: dinos domesticados, estruturas e baús pertencem à tribo
-- Save do servidor (mundo + todos os jogadores), PvE com PvP opcional
-- Avaliar migração para ECS (ex.: Bevy) se a contagem de entidades e a rede exigirem
+## ✅ v0.7 — Multiplayer LAN
+- Servidor autoritativo com tick fixo de 60 Hz; o cliente só desenha e envia input/comandos
+- Um jogador usa o mesmo servidor rodando localmente (sem rede); "Hospedar na LAN" abre o mesmo mundo para outros
+- Rede com TCP (`std::net` + bincode) e descoberta automática de servidores na LAN por broadcast UDP
+- Servidor dedicado sem janela: `island --server` (base para servidores dedicados de verdade)
+- Menu principal: nome, um jogador, hospedar, entrar por IP ou pela lista da rede local
+- Vários jogadores no mesmo mundo: nomes e cores, chat (Enter), criaturas caçam o jogador mais perto
+- Co-op total: estruturas e baús são de todos; domesticados seguem o dono (quem manda "seguir")
+- Save v2 com todos os jogadores (cada um volta como estava ao entrar com o mesmo nome); saves antigos viram o jogador do host
+- Decisão: continuar no macroquad (a rede independe da engine; Bevy exigiria reescrever render e UI)
+- Ainda não: predição no cliente (pensado para LAN; pela internet a latência aparece), tribos separadas e PvP
 
 ## v0.8 — Conteúdo e polimento
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
@@ -70,11 +74,14 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Mapa/minimapa, notas exploráveis, chefes simples
 
 ## v1.0+ — MMO
+- Predição no cliente e reconciliação (jogar pela internet, não só LAN), snapshots com delta
+- Tribos (posse de estruturas e dinos por grupo), PvP configurável
 - Servidores persistentes com banco de dados e muitos jogadores
 - Mundos maiores em chunks, várias ilhas
 - Economia entre jogadores, PvE/PvP por servidor
 
 ## Decisões técnicas a revisitar
-- **Engine:** macroquad é simples e compila rápido; se o projeto crescer muito (ECS, rede, editor), migrar para Bevy na v0.7, junto com a separação servidor/cliente. Manter a lógica em módulos puros facilita essa troca.
+- **Engine:** na v0.7 a simulação foi separada do cliente sem trocar de engine; o servidor não depende do macroquad para nada além de tipos de matemática. Bevy só se o volume de entidades/sistemas pedir ECS.
+- **Rede:** TCP + snapshots completos funcionam bem em LAN; para internet, trocar para UDP (ex.: `renet`) com deltas e predição.
 - **Mapa:** hoje é uma ilha 160×160 tiles em memória; mundos maiores pedem chunks.
 - **Dados:** itens/receitas em código agora; mover para arquivos (RON) quando houver muitos.

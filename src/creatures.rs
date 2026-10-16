@@ -218,8 +218,8 @@ pub struct Corpse {
 /// Algo relevante que aconteceu com a criatura neste frame (o jogo reage).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// Mordeu o jogador (ou a montaria dele) com este dano.
-    Bite(f32),
+    /// Mordeu um jogador (índice em `AiInput::players`) ou a montaria dele.
+    Bite { target: usize, damage: f32 },
     /// Acordou do desmaio sem ser domesticada.
     Woke,
     /// Domesticação concluída, com os níveis bônus ganhos.
@@ -249,6 +249,8 @@ pub struct Creature {
     pub inventory: Option<Inventory>,
     /// `Some` quando domesticado.
     pub command: Option<Command>,
+    /// Nome do jogador dono (domesticados seguem o dono).
+    pub owner: Option<String>,
     /// Controlado pelo jogador montado: a IA não age.
     pub mounted: bool,
     pub facing_left: bool,
@@ -265,10 +267,37 @@ pub struct Creature {
     pub corpse: Option<Corpse>,
 }
 
-/// O que a IA sabe sobre o jogador neste frame.
-pub struct AiInput {
-    pub player_pos: Vec2,
-    pub player_alive: bool,
+/// O que a IA sabe sobre um jogador neste frame.
+#[derive(Clone, Copy, Debug)]
+pub struct AiPlayer<'a> {
+    pub pos: Vec2,
+    pub alive: bool,
+    pub name: &'a str,
+}
+
+/// O que a IA sabe sobre os jogadores neste frame.
+pub struct AiInput<'a> {
+    pub players: &'a [AiPlayer<'a>],
+}
+
+impl AiInput<'_> {
+    /// Jogador vivo mais próximo: (índice, vetor até ele).
+    fn nearest_alive(&self, from: Vec2) -> Option<(usize, Vec2)> {
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.alive)
+            .map(|(i, p)| (i, p.pos - from))
+            .min_by(|a, b| a.1.length_squared().total_cmp(&b.1.length_squared()))
+    }
+
+    /// Distância até o jogador mais próximo (vivo ou não).
+    fn nearest_distance(&self, from: Vec2) -> f32 {
+        self.players
+            .iter()
+            .map(|p| p.pos.distance(from))
+            .fold(f32::INFINITY, f32::min)
+    }
 }
 
 impl Creature {
@@ -284,6 +313,7 @@ impl Creature {
             taming: None,
             inventory: None,
             command: None,
+            owner: None,
             mounted: false,
             facing_left: false,
             state: State::Idle,
@@ -456,18 +486,20 @@ impl Creature {
             return None;
         }
 
-        let to_player = input.player_pos - self.pos;
-        let dist = to_player.length();
-        if dist > SIMULATION_RADIUS {
+        if input.nearest_distance(self.pos) > SIMULATION_RADIUS {
             self.moving = false;
             return None;
         }
+        let (target, to_player, dist) = match input.nearest_alive(self.pos) {
+            Some((i, v)) => (Some(i), v, v.length()),
+            None => (None, Vec2::ZERO, f32::INFINITY),
+        };
         self.state_timer -= dt;
         self.moving = false;
 
         if let Some((_, _, _, aggro)) = self.species.attack() {
             let keep_chasing = self.state == State::Chase && dist < aggro * LEASH;
-            if input.player_alive && (dist < aggro || keep_chasing) {
+            if target.is_some() && (dist < aggro || keep_chasing) {
                 self.state = State::Chase;
             } else if self.state == State::Chase {
                 self.start_idle(rng);
@@ -498,7 +530,7 @@ impl Creature {
                 }
             }
             State::Chase => {
-                let Some((_, cooldown, range, _)) = self.species.attack() else {
+                let (Some((_, cooldown, range, _)), Some(target)) = (self.species.attack(), target) else {
                     self.start_idle(rng);
                     return None;
                 };
@@ -507,7 +539,10 @@ impl Creature {
                     if self.attack_cooldown <= 0.0 {
                         self.attack_cooldown = cooldown;
                         self.lunge = 0.25;
-                        return Some(Event::Bite(self.bite_damage()));
+                        return Some(Event::Bite {
+                            target,
+                            damage: self.bite_damage(),
+                        });
                     }
                 } else {
                     self.step(world, to_player, run, dt);
@@ -583,14 +618,24 @@ impl Creature {
     fn update_tamed(&mut self, world: &World, input: &AiInput, dt: f32) {
         self.health = (self.health + self.max_health() * TAMED_REGEN * dt).min(self.max_health());
         self.moving = false;
-        if self.command != Some(Command::Follow) || !input.player_alive {
+        if self.command != Some(Command::Follow) {
             return;
         }
-        let to_player = input.player_pos - self.pos;
+        // Segue o dono (se ele estiver no jogo e vivo).
+        let owner = self.owner.as_deref();
+        let Some(owner_pos) = input
+            .players
+            .iter()
+            .find(|p| p.alive && Some(p.name) == owner)
+            .map(|p| p.pos)
+        else {
+            return;
+        };
+        let to_player = owner_pos - self.pos;
         let dist = to_player.length();
         if dist > FOLLOW_TELEPORT {
-            // Ficou para trás (preso atrás de algo): aparece perto do jogador.
-            let behind = input.player_pos - to_player.normalize_or_zero() * FOLLOW_DISTANCE;
+            // Ficou para trás (preso atrás de algo): aparece perto do dono.
+            let behind = owner_pos - to_player.normalize_or_zero() * FOLLOW_DISTANCE;
             if self.species.can_stand(world, behind) {
                 self.pos = behind;
             }
@@ -675,7 +720,7 @@ fn roll_level(rng: &mut Rng) -> u32 {
 pub fn populate(
     creatures: &mut Vec<Creature>,
     world: &World,
-    player_pos: Vec2,
+    players: &[Vec2],
     rng: &mut Rng,
     attempts: usize,
     next_id: &mut u32,
@@ -692,7 +737,7 @@ pub fn populate(
             let x = rng.range_u32(1, world.width as u32 - 2) as i32;
             let y = rng.range_u32(1, world.height as u32 - 2) as i32;
             let pos = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
-            if spawn_ok(species, world, x, y, pos, player_pos) {
+            if spawn_ok(species, world, x, y, pos, players) {
                 let mut c = Creature::new(species, pos).with_level(roll_level(rng));
                 c.id = *next_id;
                 *next_id += 1;
@@ -703,9 +748,9 @@ pub fn populate(
     }
 }
 
-fn spawn_ok(species: Species, world: &World, x: i32, y: i32, pos: Vec2, player_pos: Vec2) -> bool {
-    // Checagens baratas primeiro; colisão (mais cara) por último.
-    if !species.habitat(world, x, y) || pos.distance(player_pos) < 420.0 {
+fn spawn_ok(species: Species, world: &World, x: i32, y: i32, pos: Vec2, players: &[Vec2]) -> bool {
+    // Checagens baratas primeiro; colisão (mais cara) por último. Nada nasce na frente de ninguém.
+    if !species.habitat(world, x, y) || players.iter().any(|p| pos.distance(*p) < 420.0) {
         return false;
     }
     if species.temperament() == Temperament::Aggressive {
@@ -743,6 +788,8 @@ pub struct CreatureSave {
     pub inventory: Option<Inventory>,
     #[serde(default)]
     pub command: Option<Command>,
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 fn one() -> u32 {
@@ -763,6 +810,7 @@ impl From<&Creature> for CreatureSave {
             taming: c.taming,
             inventory: c.inventory.clone(),
             command: c.command,
+            owner: c.owner.clone(),
         }
     }
 }
@@ -778,6 +826,7 @@ impl From<CreatureSave> for Creature {
         c.taming = s.taming;
         c.inventory = s.inventory;
         c.command = s.command;
+        c.owner = s.owner;
         c
     }
 }
@@ -788,13 +837,6 @@ mod tests {
 
     fn world() -> World {
         World::generate(1337, 160, 160)
-    }
-
-    fn input(player_pos: Vec2) -> AiInput {
-        AiInput {
-            player_pos,
-            player_alive: true,
-        }
     }
 
     /// Um ponto de grama livre, com espaço em volta para a criatura andar.
@@ -822,8 +864,14 @@ mod tests {
     fn run(c: &mut Creature, world: &World, player: Vec2, secs: f32) -> Vec<Event> {
         let mut rng = Rng::new(9);
         let dt = 1.0 / 30.0;
+        let players = [AiPlayer {
+            pos: player,
+            alive: true,
+            name: "p",
+        }];
+        let input = AiInput { players: &players };
         (0..(secs / dt) as usize)
-            .filter_map(|_| c.update(world, &input(player), &mut rng, dt))
+            .filter_map(|_| c.update(world, &input, &mut rng, dt))
             .collect()
     }
 
@@ -834,7 +882,11 @@ mod tests {
         let mut raptor = Creature::new(Species::Raptor, pos);
         let events = run(&mut raptor, &world, pos + vec2(30.0, 0.0), 4.0);
         assert_eq!(raptor.state, State::Chase);
-        assert!(events.iter().any(|e| matches!(e, Event::Bite(d) if *d > 0.0)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Bite { target: 0, damage } if *damage > 0.0))
+        );
     }
 
     #[test]
@@ -944,6 +996,7 @@ mod tests {
         let pos = open_grass(&world, Species::Dodo);
         let mut dodo = Creature::new(Species::Dodo, pos);
         dodo.command = Some(Command::Follow);
+        dodo.owner = Some("p".to_owned());
         let player = pos + vec2(35.0, 35.0);
         run(&mut dodo, &world, player, 3.0);
         assert!(dodo.pos.distance(player) <= FOLLOW_DISTANCE + 2.0);
@@ -972,7 +1025,7 @@ mod tests {
         let mut rng = Rng::new(5);
         let mut creatures = Vec::new();
         let mut next_id = 1;
-        populate(&mut creatures, &world, world.spawn, &mut rng, 5000, &mut next_id);
+        populate(&mut creatures, &world, &[world.spawn], &mut rng, 5000, &mut next_id);
         for species in Species::ALL {
             let n = creatures.iter().filter(|c| c.species == species).count();
             assert!(n <= species.population_cap(), "{species:?}");
@@ -992,7 +1045,7 @@ mod tests {
         // Domesticados não contam para o limite selvagem.
         creatures[0].command = Some(Command::Follow);
         let before = creatures.len();
-        populate(&mut creatures, &world, world.spawn, &mut rng, 5000, &mut next_id);
+        populate(&mut creatures, &world, &[world.spawn], &mut rng, 5000, &mut next_id);
         assert!(creatures.len() <= before + 1);
     }
 

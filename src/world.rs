@@ -399,8 +399,9 @@ impl World {
             .map(|(i, _)| i)
     }
 
-    /// Avança respawns e expira bolsas; um nó não renasce em cima do jogador.
-    pub fn update(&mut self, dt: f32, player_pos: Vec2) {
+    /// Avança respawns, fogo e bolsas.
+    /// `players`: posições dos jogadores (nada renasce em cima de ninguém).
+    pub fn update(&mut self, dt: f32, players: &[Vec2]) {
         for bag in &mut self.bags {
             bag.ttl -= dt;
         }
@@ -416,7 +417,8 @@ impl World {
                 continue;
             }
             node.respawn_timer -= dt;
-            let clear = node.pos.distance(player_pos) > node.kind.collision_radius() + 16.0;
+            let reach = node.kind.collision_radius() + 16.0;
+            let clear = players.iter().all(|p| node.pos.distance(*p) > reach);
             if node.respawn_timer <= 0.0 && clear {
                 node.hp = node.kind.max_hp();
             }

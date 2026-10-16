@@ -19,16 +19,19 @@ pub struct Projectile {
     pub ttl: f32,
     pub damage: f32,
     pub torpor: f32,
+    /// Jogador que atirou.
+    pub owner: u32,
 }
 
 impl Projectile {
-    pub fn stone(from: Vec2, dir: Vec2) -> Self {
+    pub fn stone(from: Vec2, dir: Vec2, owner: u32) -> Self {
         Self {
             pos: from,
             vel: dir.normalize_or(Vec2::X) * SLINGSHOT_SPEED,
             ttl: SLINGSHOT_FLIGHT,
             damage: SLINGSHOT_DAMAGE,
             torpor: SLINGSHOT_TORPOR,
+            owner,
         }
     }
 
@@ -53,7 +56,7 @@ mod tests {
     #[test]
     fn stone_flies_until_its_range_ends() {
         let world = World::generate(1337, 160, 160);
-        let mut stone = Projectile::stone(world.spawn, vec2(0.0, 1.0));
+        let mut stone = Projectile::stone(world.spawn, vec2(0.0, 1.0), 0);
         let mut steps = 0;
         while stone.update(&world, 1.0 / 60.0) {
             steps += 1;
@@ -68,7 +71,7 @@ mod tests {
         let mut world = World::generate(1337, 160, 160);
         let here = building::tile_of(world.spawn);
         world.place(StructureKind::WoodWall, (here.0 + 2, here.1));
-        let mut stone = Projectile::stone(world.spawn, vec2(1.0, 0.0));
+        let mut stone = Projectile::stone(world.spawn, vec2(1.0, 0.0), 0);
         while stone.update(&world, 1.0 / 60.0) {}
         assert!(stone.pos.x < building::tile_rect((here.0 + 2, here.1)).right());
         assert!(stone.ttl > 0.0, "parou na parede antes do fim do voo");
@@ -76,7 +79,7 @@ mod tests {
 
     #[test]
     fn hit_test() {
-        let stone = Projectile::stone(Vec2::ZERO, Vec2::X);
+        let stone = Projectile::stone(Vec2::ZERO, Vec2::X, 0);
         assert!(stone.hits(vec2(10.0, 0.0), 8.0));
         assert!(!stone.hits(vec2(30.0, 0.0), 8.0));
     }
