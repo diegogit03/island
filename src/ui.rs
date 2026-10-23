@@ -3,8 +3,8 @@
 
 use macroquad::prelude::*;
 
-use crate::building::Structure;
-use crate::crafting::{self, CraftQueue, MAX_QUEUE, RECIPES, Recipe};
+use crate::building::{Material, Piece, Structure, StructureKind};
+use crate::crafting::{self, Category, CraftQueue, MAX_QUEUE, RECIPES, Recipe};
 use crate::creatures::{Command, Creature, MountHarvest};
 use crate::daynight;
 use crate::inventory::{HOTBAR_SIZE, Inventory, Stack};
@@ -27,6 +27,8 @@ const CHAR_W: f32 = 230.0;
 const ATTR_TOP: f32 = 132.0;
 const ATTR_ROW: f32 = 30.0;
 const DETAIL_H: f32 = 92.0;
+/// Altura da linha de abas do crafting.
+const TAB_H: f32 = 34.0;
 
 const PANEL_BG: Color = Color::new(0.10, 0.11, 0.13, 0.92);
 const SLOT_BG: Color = Color::new(1.0, 1.0, 1.0, 0.08);
@@ -45,6 +47,10 @@ pub struct UiState {
     /// Digitando uma mensagem de chat.
     pub chat_open: bool,
     pub chat_input: String,
+    /// Aba aberta no painel de crafting.
+    pub craft_tab: Category,
+    /// Peças compridas (portão) na vertical (T gira).
+    pub rotate: bool,
 }
 
 /// Linha do chat: (de, texto, idade em segundos).
@@ -137,6 +143,8 @@ impl<'a> ContainerView<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     Craft(usize),
+    /// Trocar a aba do crafting (só muda a interface).
+    CraftTab(Category),
     CancelCraft(usize),
     SelectHotbar(usize),
     /// Clique num slot (esquerdo/direito, com ou sem Shift).
@@ -183,6 +191,8 @@ pub struct Hud<'a> {
     pub messages: &'a [(String, f32)],
     pub vitals: &'a Vitals,
     pub dead: bool,
+    /// O jogador tem cama (botão de renascer nela).
+    pub has_bed: bool,
     pub time: f32,
 }
 
@@ -190,7 +200,10 @@ pub struct Hud<'a> {
 
 enum RightLayout {
     Craft {
+        tabs: Vec<Rect>,
         recipes: Vec<Rect>,
+        /// Índice em `RECIPES` de cada receita da aba.
+        indices: Vec<usize>,
         detail: Rect,
         queue: Vec<Rect>,
     },
@@ -227,14 +240,31 @@ fn grid_height(n: usize, cols: usize, size: f32) -> f32 {
 }
 
 /// `container`: (slots, tipo) do contêiner aberto, se houver (substitui o painel de crafting).
-fn panel_layout(n_slots: usize, container: Option<(usize, PanelKind)>, queue_len: usize) -> PanelLayout {
+/// Receitas da maior aba (o painel não muda de tamanho ao trocar de aba).
+fn max_tab_len() -> usize {
+    Category::ALL
+        .iter()
+        .map(|&c| crafting::recipes_in(c).len())
+        .max()
+        .unwrap_or(0)
+}
+
+fn panel_layout(n_slots: usize, container: Option<(usize, PanelKind)>, queue_len: usize, tab: Category) -> PanelLayout {
     let grid_w = COLS as f32 * (SLOT + GAP) - GAP;
     let inv_w = grid_w + PAD * 2.0;
     let inv_h = HEADER + PAD * 2.0 + grid_height(n_slots, COLS, SLOT) + 8.0;
     let right_h = match container {
         Some((n, kind)) => HEADER + PAD * 2.0 + grid_height(n, COLS, SLOT) + 24.0 + kind.extra_height(),
         None => {
-            HEADER + PAD * 2.0 + grid_height(RECIPES.len(), COLS, SLOT) + DETAIL_H + 24.0 + 22.0 + SMALL_SLOT + 48.0
+            HEADER
+                + PAD * 2.0
+                + TAB_H
+                + grid_height(max_tab_len(), COLS, SLOT)
+                + DETAIL_H
+                + 24.0
+                + 22.0
+                + SMALL_SLOT
+                + 48.0
         }
     };
     let total_w = CHAR_W + 16.0 + inv_w + 16.0 + RIGHT_W;
@@ -279,12 +309,24 @@ fn panel_layout(n_slots: usize, container: Option<(usize, PanelKind)>, queue_len
             RightLayout::Container { slots, info, buttons }
         }
         None => {
-            let recipes = grid(top, RECIPES.len(), COLS, SLOT);
-            let detail_y = top.y + grid_height(RECIPES.len(), COLS, SLOT) + 12.0;
+            let tab_w = (RIGHT_W - PAD * 2.0 - GAP * 2.0) / 3.0;
+            let tabs = (0..Category::ALL.len())
+                .map(|i| Rect::new(top.x + i as f32 * (tab_w + GAP), top.y, tab_w, TAB_H - 8.0))
+                .collect();
+            let indices = crafting::recipes_in(tab);
+            let grid_top = top + vec2(0.0, TAB_H);
+            let recipes = grid(grid_top, indices.len(), COLS, SLOT);
+            let detail_y = grid_top.y + grid_height(max_tab_len(), COLS, SLOT) + 12.0;
             let detail = Rect::new(top.x, detail_y, RIGHT_W - PAD * 2.0, DETAIL_H);
             let queue_y = detail.bottom() + 12.0 + 22.0;
             let queue = grid(vec2(top.x, queue_y), queue_len, MAX_QUEUE, SMALL_SLOT);
-            RightLayout::Craft { recipes, detail, queue }
+            RightLayout::Craft {
+                tabs,
+                recipes,
+                indices,
+                detail,
+                queue,
+            }
         }
     };
 
@@ -340,7 +382,7 @@ pub fn handle_input(
         return None;
     }
 
-    let layout = panel_layout(inv_slots, container.map(|(k, n)| (n, k)), queue_len);
+    let layout = panel_layout(inv_slots, container.map(|(k, n)| (n, k)), queue_len, ui.craft_tab);
     let left = is_mouse_button_pressed(MouseButton::Left);
     let right = is_mouse_button_pressed(MouseButton::Right);
     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
@@ -372,12 +414,21 @@ pub fn handle_input(
                 });
             }
         }
-        RightLayout::Craft { recipes, queue, .. } => {
+        RightLayout::Craft {
+            tabs,
+            recipes,
+            indices,
+            queue,
+            ..
+        } => {
+            if left && let Some(i) = tabs.iter().position(|r| r.contains(m)) {
+                return Some(UiAction::CraftTab(Category::ALL[i]));
+            }
             if left
                 && !holding
                 && let Some(i) = recipes.iter().position(|r| r.contains(m))
             {
-                return Some(UiAction::Craft(i));
+                return Some(UiAction::Craft(indices[i]));
             }
             if right && let Some(i) = queue.iter().position(|r| r.contains(m)) {
                 return Some(UiAction::CancelCraft(i));
@@ -400,7 +451,7 @@ pub fn handle_input(
 
 pub fn draw(hud: &Hud) {
     if hud.dead {
-        draw_death_screen();
+        draw_death_screen(hud.has_bed);
         draw_messages(hud.messages);
         return;
     }
@@ -479,7 +530,8 @@ fn draw_chat(ui: &UiState, chat: &[ChatLine]) {
 fn draw_help() {
     let lines = [
         "WASD: mover   Shift: correr   E / Clique: coletar ou beber   R / Botão dir.: comer",
-        "F: interagir   Q: largar (Ctrl+Q: pilha)   Estrutura na mão: clique posiciona, X demole",
+        "F: interagir   Q: largar (Ctrl+Q: pilha)   Estrutura na mão: clique posiciona, T gira, X demole",
+        "Martelo na mão: E / clique repara estruturas (gasta parte dos materiais)",
         "Montado: E / Clique morde   Espaço: decolar/pousar (voadores)",
         "Tribo (apito): Z seguir   C ficar   B defender   V atacar o bicho sob o mouse",
         "1-6 / Roda: hotbar   Tab / I: inventário   Enter: chat   F5: salvar   H: esconder ajuda",
@@ -537,7 +589,21 @@ fn draw_vitals(v: &Vitals) {
     }
 }
 
-fn draw_death_screen() {
+/// Botões da tela de morte: (retângulo, renascer na cama?, texto). O primeiro é o do Enter.
+pub fn death_buttons(has_bed: bool) -> Vec<(Rect, bool, &'static str)> {
+    let (w, h) = (260.0, 44.0);
+    let x = (screen_width() - w) / 2.0;
+    let y = screen_height() / 2.0 + 70.0;
+    let mut buttons = Vec::new();
+    if has_bed {
+        buttons.push((Rect::new(x, y, w, h), true, "Renascer na cama"));
+    }
+    let y = y + buttons.len() as f32 * (h + 12.0);
+    buttons.push((Rect::new(x, y, w, h), false, "Renascer na praia"));
+    buttons
+}
+
+fn draw_death_screen(has_bed: bool) {
     draw_rectangle(
         0.0,
         0.0,
@@ -552,7 +618,24 @@ fn draw_death_screen() {
     let cy = screen_height() / 2.0;
     center("Você morreu", cy - 20.0, 64.0, Color::new(1.0, 0.85, 0.8, 1.0));
     center("Seus itens ficaram numa bolsa onde você caiu.", cy + 24.0, 24.0, TEXT);
-    center("Pressione Enter ou clique para renascer na praia", cy + 60.0, 22.0, DIM);
+    center("Enter: primeira opção", cy + 54.0, 18.0, DIM);
+    let m = mouse();
+    for (rect, _, label) in death_buttons(has_bed) {
+        let bg = if rect.contains(m) {
+            Color::new(1.0, 0.8, 0.35, 1.0)
+        } else {
+            Color::new(0.85, 0.65, 0.25, 1.0)
+        };
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+        let w = measure_text(label, None, 24, 1.0).width;
+        draw_text(
+            label,
+            rect.x + (rect.w - w) / 2.0,
+            rect.y + 29.0,
+            24.0,
+            Color::new(0.1, 0.08, 0.05, 1.0),
+        );
+    }
 }
 
 fn draw_messages(messages: &[(String, f32)]) {
@@ -650,7 +733,11 @@ fn draw_hotbar(inv: &Inventory, selected: usize, mount_hint: Option<&str>) {
     if let Some(stack) = inv.slots[selected] {
         let name = match stack.item {
             _ if mount_hint.is_some() => format!("{}  ({})", stack.item.name(), mount_hint.unwrap_or_default()),
+            item if item.structure().is_some_and(StructureKind::rotates) => {
+                format!("{}  (clique para posicionar, T gira)", item.name())
+            }
             item if item.structure().is_some() => format!("{}  (clique para posicionar)", item.name()),
+            ItemId::Hammer => "Martelo  (E / clique numa estrutura danificada repara)".to_owned(),
             ItemId::Slingshot => format!(
                 "Estilingue  ({} pedras, clique mira no cursor)",
                 inv.count(ItemId::Stone)
@@ -678,6 +765,7 @@ fn draw_panels(hud: &Hud) {
         inv.slots.len(),
         hud.container.zip(storage).map(|(c, s)| (s.slots.len(), c.kind())),
         hud.queue.jobs.len(),
+        hud.ui.craft_tab,
     );
     let m = mouse();
 
@@ -734,10 +822,29 @@ fn draw_panels(hud: &Hud) {
                 );
             }
         }
-        (RightLayout::Craft { recipes, detail, queue }, _) => {
+        (
+            RightLayout::Craft {
+                tabs,
+                recipes,
+                indices,
+                detail,
+                queue,
+            },
+            _,
+        ) => {
             draw_panel(rp, "Crafting");
+            for (rect, &tab) in tabs.iter().zip(&Category::ALL) {
+                let active = tab == hud.ui.craft_tab;
+                let bg = if active { ACCENT } else { SLOT_BG };
+                draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+                draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, BORDER);
+                let label = tab.label();
+                let w = measure_text(label, None, 18, 1.0).width;
+                let color = if active { Color::new(0.1, 0.08, 0.05, 1.0) } else { TEXT };
+                draw_text(label, rect.x + (rect.w - w) / 2.0, rect.y + 19.0, 18.0, color);
+            }
             let hovered = recipes.iter().position(|r| r.contains(m));
-            for (i, (rect, recipe)) in recipes.iter().zip(RECIPES).enumerate() {
+            for (i, (rect, recipe)) in recipes.iter().zip(indices.iter().map(|&k| &RECIPES[k])).enumerate() {
                 let known = hud.progression.knows(recipe.output);
                 let craftable = known && crafting::can_afford(inv, recipe) && (hud.station_ok)(recipe);
                 draw_slot(*rect, None, false);
@@ -756,7 +863,7 @@ fn draw_panels(hud: &Hud) {
                     draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::new(0.0, 0.0, 0.0, 0.45));
                 }
             }
-            draw_recipe_detail(*detail, hovered.map(|i| &RECIPES[i]), hud);
+            draw_recipe_detail(*detail, hovered.map(|i| &RECIPES[indices[i]]), hud);
             draw_queue(*detail, queue, hud.queue);
             if let Some(i) = queue.iter().position(|r| r.contains(m)) {
                 tooltip = Some(format!("{} (botão dir.: cancelar)", hud.queue.jobs[i].output.name()));
@@ -1465,5 +1572,164 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
             let k = p(6.0, 1.0);
             draw_circle(k.x, k.y, 2.0 * u, Color::from_rgba(220, 190, 100, 255));
         }
+        ItemId::StoneFoundation
+        | ItemId::StoneWall
+        | ItemId::StoneDoor
+        | ItemId::MetalFoundation
+        | ItemId::MetalWall
+        | ItemId::MetalDoor
+        | ItemId::WoodWindow
+        | ItemId::StoneWindow
+        | ItemId::MetalWindow
+        | ItemId::WoodGate
+        | ItemId::StoneGate
+        | ItemId::MetalGate
+        | ItemId::WoodRoof
+        | ItemId::StoneRoof
+        | ItemId::MetalRoof
+        | ItemId::WoodFence => {
+            if let Some(kind) = item.structure() {
+                draw_piece_icon(kind, rect);
+            }
+        }
+        ItemId::Bed => {
+            rect_at(-12.0, -16.0, 24.0, 32.0, wood);
+            rect_at(-10.0, -13.0, 20.0, 26.0, Color::from_rgba(236, 232, 222, 255));
+            rect_at(-7.0, -12.0, 14.0, 6.0, WHITE);
+            rect_at(-10.0, -3.0, 20.0, 16.0, Color::from_rgba(170, 52, 52, 255));
+        }
+        ItemId::Torch => {
+            line(p(0.0, 16.0), p(0.0, -4.0), 4.0, wood_dark);
+            draw_triangle(
+                p(-6.0, -4.0),
+                p(6.0, -4.0),
+                p(0.0, -18.0),
+                Color::from_rgba(240, 120, 30, 255),
+            );
+            draw_triangle(
+                p(-3.0, -4.0),
+                p(3.0, -4.0),
+                p(0.0, -11.0),
+                Color::from_rgba(255, 220, 100, 255),
+            );
+        }
+        ItemId::Table => {
+            rect_at(-16.0, -6.0, 32.0, 6.0, wood_light);
+            rect_at(-16.0, 0.0, 32.0, 3.0, wood);
+            rect_at(-13.0, 3.0, 4.0, 12.0, wood_dark);
+            rect_at(9.0, 3.0, 4.0, 12.0, wood_dark);
+        }
+        ItemId::Chair => {
+            rect_at(-8.0, -16.0, 16.0, 14.0, wood);
+            rect_at(-8.0, -2.0, 16.0, 5.0, wood_light);
+            rect_at(-8.0, 3.0, 3.0, 12.0, wood_dark);
+            rect_at(5.0, 3.0, 3.0, 12.0, wood_dark);
+        }
+        ItemId::Rug => {
+            let gold = Color::from_rgba(220, 180, 90, 255);
+            rect_at(-16.0, -11.0, 32.0, 22.0, Color::from_rgba(150, 48, 52, 255));
+            draw_rectangle_lines(c.x - 13.0 * u, c.y - 8.0 * u, 26.0 * u, 16.0 * u, 1.5 * u, gold);
+            draw_triangle(p(-6.0, 0.0), p(0.0, -5.0), p(6.0, 0.0), gold);
+            draw_triangle(p(-6.0, 0.0), p(0.0, 5.0), p(6.0, 0.0), gold);
+        }
+        ItemId::FlowerPot => {
+            let clay = Color::from_rgba(184, 98, 60, 255);
+            draw_triangle(p(-10.0, 0.0), p(10.0, 0.0), p(7.0, 16.0), clay);
+            draw_triangle(p(-10.0, 0.0), p(7.0, 16.0), p(-7.0, 16.0), clay);
+            let leaf = Color::from_rgba(70, 140, 60, 255);
+            for (dx, dy) in [(-6.0, -4.0), (5.0, -5.0), (0.0, -10.0)] {
+                let q = p(dx, dy);
+                draw_circle(q.x, q.y, 6.0 * u, leaf);
+            }
+            for (dx, dy, col) in [
+                (-5.0, -9.0, Color::from_rgba(240, 90, 120, 255)),
+                (5.0, -11.0, Color::from_rgba(250, 210, 80, 255)),
+                (0.0, -15.0, Color::from_rgba(200, 120, 230, 255)),
+            ] {
+                let q = p(dx, dy);
+                draw_circle(q.x, q.y, 3.0 * u, col);
+            }
+        }
+        ItemId::Hammer => {
+            line(p(-10.0, 14.0), p(6.0, -6.0), 4.0, wood);
+            let (a, b) = (p(0.0, -14.0), p(14.0, 0.0));
+            line(a, b, 8.0, stone_dark);
+            line(p(2.0, -12.0), p(12.0, -2.0), 4.0, stone);
+        }
+    }
+}
+
+/// Ícone de peça de construção (parede, porta, janela, portão, teto, cerca, fundação) na cor do material.
+fn draw_piece_icon(kind: StructureKind, rect: Rect) {
+    let c = rect.center();
+    let u = rect.w / 52.0;
+    let p = |dx: f32, dy: f32| vec2(c.x + dx * u, c.y + dy * u);
+    let rect_at = |dx: f32, dy: f32, w: f32, h: f32, col| draw_rectangle(c.x + dx * u, c.y + dy * u, w * u, h * u, col);
+    let line = |a: Vec2, b: Vec2, t: f32, col| draw_line(a.x, a.y, b.x, b.y, t * u, col);
+    let (top, front, dark) = match kind.material().unwrap_or(Material::Wood) {
+        Material::Wood => (
+            Color::from_rgba(214, 170, 112, 255),
+            Color::from_rgba(150, 104, 60, 255),
+            Color::from_rgba(97, 64, 33, 255),
+        ),
+        Material::Stone => (
+            Color::from_rgba(178, 174, 168, 255),
+            Color::from_rgba(130, 126, 120, 255),
+            Color::from_rgba(84, 80, 76, 255),
+        ),
+        Material::Metal => (
+            Color::from_rgba(170, 180, 192, 255),
+            Color::from_rgba(106, 116, 130, 255),
+            Color::from_rgba(60, 66, 78, 255),
+        ),
+    };
+    match kind.piece() {
+        Piece::Foundation => {
+            rect_at(-15.0, -15.0, 30.0, 30.0, front);
+            line(p(0.0, -15.0), p(0.0, 15.0), 1.5, dark);
+            line(p(-15.0, 0.0), p(15.0, 0.0), 1.5, dark);
+        }
+        Piece::Wall | Piece::Window => {
+            rect_at(-15.0, -16.0, 30.0, 10.0, top);
+            rect_at(-15.0, -6.0, 30.0, 20.0, front);
+            if kind.piece() == Piece::Window {
+                rect_at(-8.0, -3.0, 16.0, 13.0, Color::from_rgba(140, 190, 230, 255));
+                line(p(0.0, -3.0), p(0.0, 10.0), 1.5, dark);
+                line(p(-8.0, 3.5), p(8.0, 3.5), 1.5, dark);
+            } else {
+                line(p(-15.0, 4.0), p(15.0, 4.0), 1.5, dark);
+                line(p(-5.0, -6.0), p(-5.0, 4.0), 1.5, dark);
+                line(p(6.0, 4.0), p(6.0, 14.0), 1.5, dark);
+            }
+        }
+        Piece::Door => {
+            rect_at(-11.0, -16.0, 22.0, 32.0, front);
+            draw_rectangle_lines(c.x - 8.0 * u, c.y - 13.0 * u, 16.0 * u, 26.0 * u, 1.5 * u, dark);
+            let k = p(6.0, 1.0);
+            draw_circle(k.x, k.y, 2.0 * u, top);
+        }
+        Piece::Gate => {
+            rect_at(-18.0, -12.0, 36.0, 6.0, top);
+            rect_at(-18.0, -6.0, 36.0, 18.0, front);
+            line(p(-15.0, -4.0), p(-1.0, 10.0), 2.0, dark);
+            line(p(-15.0, 10.0), p(-1.0, -4.0), 2.0, dark);
+            line(p(1.0, -4.0), p(15.0, 10.0), 2.0, dark);
+            line(p(1.0, 10.0), p(15.0, -4.0), 2.0, dark);
+            line(p(0.0, -6.0), p(0.0, 12.0), 2.0, dark);
+        }
+        Piece::Roof => {
+            draw_triangle(p(-18.0, 2.0), p(18.0, 2.0), p(0.0, -16.0), top);
+            rect_at(-14.0, 2.0, 28.0, 12.0, front);
+            line(p(-18.0, 2.0), p(0.0, -16.0), 2.0, dark);
+            line(p(18.0, 2.0), p(0.0, -16.0), 2.0, dark);
+        }
+        Piece::Fence => {
+            for dx in [-12.0, 0.0, 12.0] {
+                rect_at(dx - 2.0, -12.0, 4.0, 26.0, top);
+            }
+            line(p(-16.0, -4.0), p(16.0, -4.0), 3.0, front);
+            line(p(-16.0, 6.0), p(16.0, 6.0), 3.0, front);
+        }
+        Piece::Station | Piece::Furniture => {}
     }
 }

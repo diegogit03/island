@@ -640,6 +640,15 @@ pub enum Event {
     Woke,
     /// Domesticação concluída, com os níveis bônus ganhos.
     Tamed { bonus_levels: u32 },
+    /// Mordeu uma estrutura que estava no caminho da presa (índice em `world.structures`).
+    Smash { structure: usize, damage: f32 },
+}
+
+/// Alvo de quem luta pela tribo (domesticados e membros): uma criatura ou um NPC hostil, pelo `id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Foe {
+    Creature(u32),
+    Npc(u32),
 }
 
 /// Resultado de um golpe recebido.
@@ -690,8 +699,8 @@ pub struct Creature {
     pub moving: bool,
     pub anim_time: f32,
     pub corpse: Option<Corpse>,
-    /// Domesticado atacando esta criatura (`id`); a luta é conduzida pela simulação (`sim/tribe.rs`).
-    pub attack_target: Option<u32>,
+    /// Domesticado atacando este alvo; a luta é conduzida pela simulação (`sim/tribe.rs`).
+    pub attack_target: Option<Foe>,
     /// Posto de quem recebeu a ordem de defender.
     pub home: Option<Vec2>,
 }
@@ -704,6 +713,8 @@ pub struct AiPlayer<'a> {
     pub name: &'a str,
     /// Montado num voador no ar: só outros voadores o alcançam.
     pub airborne: bool,
+    /// Debaixo de um teto: voadores não o alcançam.
+    pub sheltered: bool,
 }
 
 /// O que a IA sabe sobre os jogadores neste frame.
@@ -717,7 +728,7 @@ impl AiInput<'_> {
         self.players
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.alive && (flier || !p.airborne))
+            .filter(|(_, p)| p.alive && if flier { !p.sheltered } else { !p.airborne })
             .map(|(i, p)| (i, p.pos - from))
             .min_by(|a, b| a.1.length_squared().total_cmp(&b.1.length_squared()))
     }
@@ -1085,6 +1096,16 @@ impl Creature {
                             damage: self.bite_damage(),
                         });
                     }
+                } else if let Some(structure) = self.blocking_structure(world, to_player) {
+                    // Parede, porta ou cerca entre ela e a presa: morde até derrubar.
+                    if self.attack_cooldown <= 0.0 {
+                        self.attack_cooldown = cooldown;
+                        self.lunge = 0.25;
+                        return Some(Event::Smash {
+                            structure,
+                            damage: self.bite_damage(),
+                        });
+                    }
                 } else {
                     self.step(world, to_player, chase, dt);
                 }
@@ -1251,6 +1272,14 @@ impl Creature {
             Some(Command::Stay | Command::Defend) => Some(Command::Follow),
             None => None,
         };
+    }
+
+    /// Estrutura logo à frente, no caminho até a presa (quem voa ou anda enterrado passa por cima/baixo).
+    fn blocking_structure(&self, world: &World, dir: Vec2) -> Option<usize> {
+        if self.flying || self.buried || self.leap > 0.0 {
+            return None;
+        }
+        world.structure_in_way(self.pos, dir, self.species.radius())
     }
 
     fn start_idle(&mut self, rng: &mut Rng) {
@@ -1470,6 +1499,7 @@ mod tests {
             alive: true,
             name: "p",
             airborne: false,
+            sheltered: false,
         }];
         let input = AiInput { players: &players };
         (0..(secs / dt) as usize)
@@ -1655,6 +1685,7 @@ mod tests {
             alive: true,
             name: "p",
             airborne: false,
+            sheltered: false,
         }];
         let input = AiInput { players: &players };
         let mut rng = Rng::new(1);
@@ -1673,10 +1704,46 @@ mod tests {
                 alive: true,
                 name: "p",
                 airborne: true,
+                sheltered: false,
             }],
         };
         assert!(input.nearest_alive(Vec2::ZERO, false).is_none());
         assert!(input.nearest_alive(Vec2::ZERO, true).is_some());
+        let roofed = [AiPlayer {
+            pos: vec2(10.0, 0.0),
+            alive: true,
+            name: "p",
+            airborne: false,
+            sheltered: true,
+        }];
+        let input = AiInput { players: &roofed };
+        assert!(
+            input.nearest_alive(Vec2::ZERO, true).is_none(),
+            "voador não pega quem está sob o teto"
+        );
+        assert!(input.nearest_alive(Vec2::ZERO, false).is_some());
+    }
+
+    #[test]
+    fn raptor_bites_through_the_wall_in_its_way() {
+        let mut world = World::generate(1337, 160, 160);
+        let pos = open_grass(&world, Species::Raptor);
+        let player = pos + vec2(80.0, 0.0);
+        let mut tile = crate::building::tile_of(pos + vec2(40.0, 0.0));
+        for dy in -2..=2 {
+            tile.1 = crate::building::tile_of(pos).1 + dy;
+            world.structures.push(crate::building::Structure::new(
+                crate::building::StructureKind::WoodWall,
+                tile,
+            ));
+        }
+        world.nodes.retain(|n| n.pos.distance(pos) > 160.0);
+        let mut raptor = Creature::new(Species::Raptor, pos);
+        let events = run(&mut raptor, &world, player, 6.0);
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Smash { .. })),
+            "morde a parede no caminho: {events:?}"
+        );
     }
 
     #[test]

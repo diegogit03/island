@@ -6,7 +6,7 @@
 
 Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, construa, domestique dinossauros e jogue com amigos na rede local. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop.
 
-## O que já tem (v0.9)
+## O que já tem (v0.10)
 
 - Ilha procedural com praia, água rasa e água funda
 - Coleta de madeira, palha, pedra, sílex e frutinhas
@@ -19,6 +19,8 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Domesticação: derrube dinos com clava ou estilingue, alimente-os desacordados e monte num raptor com sela
 - **Criaturas voadoras**: pteranodonte (o mais rápido) e argentavis (carrega mais peso), montáveis com sela; voe sobre a ilha e o mar
 - Peso de carga dos dinos: carregado demais, o dino fica lento e não decola
+- **Construções** em madeira, pedra e metal: paredes, portas, janelas, portões grandes para dinos, tetos e cercas; cama como ponto de renascer, móveis e tochas; estruturas têm vida e são reparadas com o martelo
+- **Saqueadores**: à noite, grupos hostis atacam bases; criaturas também mordem as paredes no caminho
 - **Tribos**: acampamentos de NPCs pelo mapa; recrute moradores, dê ferramentas e armas e mande seguir, ficar, defender ou coletar e guardar no baú; domesticados lutam junto
 - **Bioma de deserto** no oeste: golem de pedra disfarçado de rocha, canguru (montado, pula), louva-deus e o verme da morte, que anda debaixo da areia
 - **Mar**: jangada para navegar e fauna marinha domesticável e montável (megalodonte, ictiossauro, mosassauro e kraken)
@@ -49,11 +51,13 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | E / clique esquerdo | Coletar, atacar (estilingue: mira no cursor); na beira da água, beber; montado: morder (mamute: derrubar árvores; smilodon: tirar couro de carcaças) |
 | R / clique direito | Comer o item selecionado; com a jangada na mão, pô-la na água |
 | Clique (estrutura na mão) | Posicionar estrutura |
+| T | Girar o portão antes de posicionar |
+| E / clique (martelo na mão) | Reparar a estrutura danificada à frente |
 | X | Demolir a estrutura sob o cursor |
 | 1–6 / roda do mouse | Selecionar slot da hotbar |
 | Tab / I | Inventário, personagem (atributos) e crafting/engramas |
 | Q / Ctrl+Q | Largar 1 item / a pilha |
-| F | Interagir: pegar itens, abrir porta/baú/fogueira, usar bancada, abrir dino (alimentar/comandar); montado: desmontar |
+| F | Interagir: pegar itens, abrir porta/portão/baú/fogueira, usar bancada, tornar uma cama sua, abrir dino (alimentar/comandar); montado: desmontar |
 | Espaço | Montado: voador decola/pousa; beelzebufo e canguru pulam |
 | F5 | Salvar |
 | Z / C / B | Apito para a tribo por perto: seguir / ficar / defender |

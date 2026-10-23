@@ -1,10 +1,12 @@
-//! NPCs: moradores dos acampamentos, que podem ser recrutados para a tribo de um jogador.
+//! NPCs: moradores dos acampamentos, que podem ser recrutados para a tribo de um jogador,
+//! e saqueadores que atacam bases à noite.
 //! Aqui ficam o estado de cada NPC e as regras puras (ferramenta certa, custo de recrutar, ordens);
-//! o comportamento a cada tick (andar, coletar, lutar) fica em `sim/tribe.rs`.
+//! o comportamento a cada tick (andar, coletar, lutar) fica em `sim/tribe.rs` e `sim/raid.rs`.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::creatures::Foe;
 use crate::inventory::{Inventory, Stack};
 use crate::items::{ItemId, ToolKind};
 use crate::player::{Facing, Player};
@@ -19,6 +21,10 @@ pub const MAX_TRIBE: usize = 8;
 pub const HAUL_AT: u32 = 40;
 /// Moradores que cada acampamento mantém (recrutados são repostos com o tempo).
 pub const CAMP_POPULATION: usize = 3;
+/// Vida de um saqueador.
+pub const RAIDER_HEALTH: f32 = 80.0;
+/// `camp` de quem não mora em acampamento nenhum (saqueadores).
+pub const NO_CAMP: usize = usize::MAX;
 
 const NAMES: [&str; 20] = [
     "Iara", "Caio", "Bento", "Luna", "Tainá", "Raoni", "Jaci", "Ravi", "Maya", "Kauê", "Aruana", "Cauã", "Moema",
@@ -116,8 +122,8 @@ pub struct Npc {
     pub order: Order,
     /// Variação de aparência (camisa e cabelo).
     pub look: u8,
-    /// Criatura que está atacando (`id`).
-    pub target: Option<u32>,
+    /// Quem está atacando (membros da tribo).
+    pub target: Option<Foe>,
     /// Item na mão agora (depende do que está fazendo).
     pub held: Option<ItemId>,
     /// Nó de recurso em que está trabalhando e um a evitar (ficou preso tentando chegar nele).
@@ -129,9 +135,19 @@ pub struct Npc {
     pub stuck: f32,
     /// Tempo desde o último dano (regenera depois de um tempo).
     pub calm: f32,
-    /// Destino de passeio dos moradores do acampamento.
+    /// Destino de passeio dos moradores do acampamento (e desvio dos saqueadores presos).
     pub stroll: Vec2,
     pub stroll_timer: f32,
+    /// Saqueador: ataca bases, jogadores e a tribo. Não vai para o save.
+    pub hostile: bool,
+    /// Base que o saqueador veio atacar.
+    pub raid: Vec2,
+    /// Saqueador indo embora (amanheceu ou não sobrou nada para quebrar).
+    pub retreat: bool,
+    /// Segundos desde que o saqueador apareceu.
+    pub life: f32,
+    /// Jogador que deu o último golpe (XP de quem abateu um saqueador).
+    pub last_hit: Option<usize>,
 }
 
 impl Npc {
@@ -155,7 +171,39 @@ impl Npc {
             calm: 0.0,
             stroll: pos,
             stroll_timer: 0.0,
+            hostile: false,
+            raid: pos,
+            retreat: false,
+            life: 0.0,
+            last_hit: None,
         }
+    }
+
+    /// Saqueador vindo atacar a base em `raid`, com uma arma e o que vai deixar cair ao morrer.
+    pub fn raider(id: u32, pos: Vec2, raid: Vec2, weapon: ItemId, loot: &[(ItemId, u32)]) -> Self {
+        let mut n = Npc::new(id, pos, NO_CAMP, (id % 6) as u8);
+        n.name = "Saqueador".to_owned();
+        n.hostile = true;
+        n.raid = raid;
+        n.health = RAIDER_HEALTH;
+        n.inventory.add(weapon, 1);
+        for &(item, count) in loot {
+            n.inventory.add(item, count);
+        }
+        n.held = Some(weapon);
+        n
+    }
+
+    pub fn is_member(&self) -> bool {
+        self.owner.is_some()
+    }
+
+    pub fn is_villager(&self) -> bool {
+        self.owner.is_none() && !self.hostile
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.health > 0.0
     }
 
     pub fn pos(&self) -> Vec2 {
@@ -296,6 +344,7 @@ pub struct NpcView {
     pub look: u8,
     pub order: Order,
     pub hauling: bool,
+    pub hostile: bool,
     /// Só para quem está com o painel aberto (dono, ou qualquer um num morador).
     pub inventory: Option<Inventory>,
 }
@@ -316,6 +365,7 @@ impl NpcView {
             look: n.look,
             order: n.order,
             hauling: n.hauling,
+            hostile: n.hostile,
             // Morador: painel sem slots (só o pedido de recrutamento).
             inventory: with_inventory.then(|| match n.owner {
                 Some(_) => n.inventory.clone(),
@@ -325,7 +375,8 @@ impl NpcView {
     }
 
     pub fn health_frac(&self) -> f32 {
-        (self.health / MAX_HEALTH).clamp(0.0, 1.0)
+        let max = if self.hostile { RAIDER_HEALTH } else { MAX_HEALTH };
+        (self.health / max).clamp(0.0, 1.0)
     }
 
     /// O que um morador pede para entrar na tribo.

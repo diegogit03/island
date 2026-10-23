@@ -1,7 +1,7 @@
 //! Cliente: recebe snapshots do servidor, suaviza posições, transforma teclado/mouse em
 //! `Input`/`Command` e desenha. Não decide nada sobre o jogo: quem manda é o servidor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use macroquad::prelude::*;
 
@@ -139,8 +139,61 @@ impl Client {
         self.remotes.iter().find(|r| r.view.id == me)
     }
 
+    /// NPCs com quem dá para falar (saqueadores não).
     fn npc_spots(&self) -> Vec<(u32, Vec2)> {
-        self.npcs.iter().map(|n| (n.view.id, n.body.pos)).collect()
+        self.npcs
+            .iter()
+            .filter(|n| !n.view.hostile)
+            .map(|n| (n.view.id, n.body.pos))
+            .collect()
+    }
+
+    /// Saqueadores (alvos de golpe).
+    fn foe_spots(&self) -> Vec<(u32, Vec2)> {
+        self.npcs
+            .iter()
+            .filter(|n| n.view.hostile)
+            .map(|n| (n.view.id, n.body.pos))
+            .collect()
+    }
+
+    fn my_name(&self) -> Option<&str> {
+        self.my_view().map(|r| r.view.name.as_str())
+    }
+
+    /// O jogador local tem alguma cama?
+    fn has_bed(&self) -> bool {
+        let (Some(world), Some(name)) = (self.world.as_ref(), self.my_name()) else {
+            return false;
+        };
+        world
+            .structures
+            .iter()
+            .any(|s| s.kind == building::StructureKind::Bed && s.owner.as_deref() == Some(name))
+    }
+
+    /// Tiles de teto do cômodo onde o jogador local está (ficam transparentes).
+    fn roof_under_me(&self, world: &World) -> HashSet<(i32, i32)> {
+        let mut hidden = HashSet::new();
+        let Some(me) = self.my_view() else { return hidden };
+        let roofs: HashSet<(i32, i32)> = world
+            .structures
+            .iter()
+            .filter(|s| s.kind.layer() == building::Layer::Roof)
+            .map(|s| s.tile)
+            .collect();
+        let start = building::tile_of(me.player.pos);
+        if !roofs.contains(&start) {
+            return hidden;
+        }
+        let mut stack = vec![start];
+        while let Some(t) = stack.pop() {
+            if hidden.len() > 800 || !roofs.contains(&t) || !hidden.insert(t) {
+                continue;
+            }
+            stack.extend([(t.0 + 1, t.1), (t.0 - 1, t.1), (t.0, t.1 + 1), (t.0, t.1 - 1)]);
+        }
+        hidden
     }
 
     fn creature(&self, id: u32) -> Option<&Creature> {
@@ -389,8 +442,17 @@ impl Client {
         }
 
         if me.dead {
-            if is_key_pressed(KeyCode::Enter) || is_mouse_button_pressed(MouseButton::Left) {
-                self.send(Command::Respawn);
+            let buttons = ui::death_buttons(self.has_bed());
+            let m: Vec2 = mouse_position().into();
+            let clicked = if is_key_pressed(KeyCode::Enter) {
+                buttons.first()
+            } else if is_mouse_button_pressed(MouseButton::Left) {
+                buttons.iter().find(|b| b.0.contains(m))
+            } else {
+                None
+            };
+            if let Some(&(_, bed, _)) = clicked {
+                self.send(Command::Respawn { bed });
             }
             self.send_input(Input::default(), dt);
             return;
@@ -434,6 +496,9 @@ impl Client {
         }
         if is_key_pressed(KeyCode::H) {
             self.ui.hide_help = !self.ui.hide_help;
+        }
+        if is_key_pressed(KeyCode::T) && self.placing_kind().is_some_and(building::StructureKind::rotates) {
+            self.ui.rotate = !self.ui.rotate;
         }
         if is_key_pressed(KeyCode::F5) {
             self.send(Command::Save);
@@ -480,8 +545,12 @@ impl Client {
             me.queue.jobs.len(),
             me.held.is_some(),
         );
-        if let Some(action) = action {
+        // Trocar de aba é só interface: não vai para o servidor.
+        if let Some(UiAction::CraftTab(tab)) = action {
+            self.ui.craft_tab = tab;
+        } else if let Some(action) = action {
             let cmd = match action {
+                UiAction::CraftTab(_) => unreachable!("tratado acima"),
                 UiAction::Craft(i) => Command::Craft(i),
                 UiAction::CancelCraft(i) => Command::CancelCraft(i),
                 UiAction::SelectHotbar(i) => Command::SelectHotbar(i),
@@ -518,6 +587,7 @@ impl Client {
             if placing && is_mouse_button_pressed(MouseButton::Left) && !over_ui {
                 self.send(Command::Place {
                     tile: building::tile_of(self.mouse_world()),
+                    vertical: self.ui.rotate,
                 });
             }
             if is_key_pressed(KeyCode::X) {
@@ -638,10 +708,11 @@ impl Client {
 
         let interactive = !self.ui.inventory_open && !me.dead && !self.paused;
         let on_foot = interactive && me.mount.is_none();
+        let foes = self.foe_spots();
         let ring = my
             .filter(|_| on_foot)
-            .and_then(|r| sim::find_target(world, &self.creatures, &r.player, self.equipped()))
-            .map(|t| sim::target_ring(world, &self.creatures, t));
+            .and_then(|r| sim::find_target(world, &self.creatures, &foes, &r.player, self.equipped()))
+            .map(|t| sim::target_ring(world, &self.creatures, &foes, t));
         let mut avatars: Vec<Avatar> = self
             .remotes
             .iter()
@@ -655,6 +726,7 @@ impl Client {
                 band: None,
                 name: (Some(r.view.id) != self.me).then_some(r.view.name.as_str()),
                 health: None,
+                hostile: false,
             })
             .collect();
         // Membros da tribo usam uma faixa na cor do dono (cinza se ele não estiver no jogo).
@@ -668,6 +740,12 @@ impl Client {
         };
         avatars.extend(self.npcs.iter().map(|n| {
             let (shirt, hair) = render::npc_look(n.view.look);
+            let (shirt, hair, band) = if n.view.hostile {
+                let (s, h, b) = render::RAIDER_LOOK;
+                (s, h, Some(b))
+            } else {
+                (shirt, hair, tribe_color(&n.view.owner))
+            };
             let frac = n.view.health_frac();
             Avatar {
                 player: &n.body,
@@ -675,9 +753,10 @@ impl Client {
                 mount: None,
                 shirt,
                 hair,
-                band: tribe_color(&n.view.owner),
+                band,
                 name: Some(n.label.as_str()),
                 health: (frac < 1.0).then_some(frac),
+                hostile: n.view.hostile,
             }
         }));
         render::draw_entities(&render::Scene {
@@ -700,13 +779,16 @@ impl Client {
                 .iter()
                 .map(|a| (a.player.pos - vec2(0.0, 12.0), PLAYER_LIGHT, false)),
         );
+        render::draw_roofs(world, view, &self.roof_under_me(world));
         render::draw_golden_hour(view, daynight::golden_hour(hour));
         render::draw_lighting(view, daynight::darkness(hour), &lights);
 
         if on_foot && let (Some(kind), Some(r)) = (self.placing_kind(), my) {
             let tile = building::tile_of(self.mouse_world());
-            let valid = world.can_place(kind, tile, r.player.pos, player::RADIUS).is_ok();
-            render::draw_ghost(kind, tile, valid);
+            let valid = world
+                .can_place_oriented(kind, tile, self.ui.rotate, r.player.pos, player::RADIUS)
+                .is_ok();
+            render::draw_ghost(kind, tile, self.ui.rotate, valid);
         }
 
         set_default_camera();
@@ -740,6 +822,7 @@ impl Client {
             messages: &self.messages,
             vitals: &me.vitals,
             dead: me.dead,
+            has_bed: self.has_bed(),
             time: self.time,
         });
         if self.paused {
@@ -756,7 +839,8 @@ impl Client {
             Interaction::Structure(i) => {
                 let s = world.structures.get(i)?;
                 let r = s.rect();
-                (render::structure_label(s), vec2(r.center().x, r.y - 30.0))
+                let me = self.my_name().unwrap_or_default();
+                (render::structure_label(s, me), vec2(r.center().x, r.y - 30.0))
             }
             Interaction::Npc(id) => {
                 let n = self.npcs.iter().find(|n| n.view.id == id)?;

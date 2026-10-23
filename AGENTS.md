@@ -14,7 +14,7 @@ cargo run -- --server [--port 7777] [--save saves/save.json] [--name "Nome"]   #
 cargo test                # lógica + servidor de verdade (cliente local e dois clientes TCP)
 cargo fmt && cargo clippy --all-targets -- -D warnings   # rustfmt.toml: max_width 120
 ISLAND_SHOT=out.png cargo run                          # smoke test: sobe servidor local, salva screenshot e sai
-ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, FLY, CARGO, ICE, SWAMP, SEA, SEA_RIDE, DESERT, TRIBE, RECRUIT, MEMBER, MOUNTAIN, COOP, MENU
+ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, FLY, CARGO, ICE, SWAMP, SEA, SEA_RIDE, DESERT, TRIBE, RECRUIT, MEMBER, FORTRESS, RAID, MOUNTAIN, COOP, MENU
 ISLAND_SHOT=out.png ISLAND_SHOT_HOUR=22 cargo run      # ajusta o relógio (combina com as cenas)
 ISLAND_SHOT=out.png ISLAND_SHOT_JOIN=127.0.0.1:7777 cargo run   # entra num servidor já rodando (teste com processos reais)
 ISLAND_NEW=1 ISLAND_SEED=42 cargo run  # ignora o save e gera outra ilha
@@ -45,8 +45,9 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 | `progression.rs` | XP, nível, pontos de atributo e engramas. |
 | `items.rs` / `inventory.rs` | Itens e inventário em slots (hotbar = slots `0..HOTBAR_SIZE`). |
 | `crafting.rs` | Receitas (tempo, estação, nível, custo de engrama) e fila de crafting. |
-| `building.rs` | Estruturas no grid, colisão, fogo (fogueira cozinha, forja funde). |
+| `building.rs` | Estruturas no grid (peça + material, portão de 3 tiles, camadas piso/objeto/teto), colisão, vida e reparo, fogo (fogueira cozinha, forja funde). |
 | `npc.rs` / `sim/tribe.rs` | NPCs (estado, ferramentas, ordens, save) e o comportamento da tribo no tick: moradores, recrutar, coletar e guardar, lutar, apitos, domesticados lutando. |
+| `sim/raid.rs` | Saqueadores: quando e onde aparecem (noite, perto de base), quebrar estruturas, atacar jogadores/tribo/dinos, ir embora. Não vão para o save. |
 | `raft.rs` | Jangada: flutuação, remo, onde pôr e onde descer. Fica em `Sim::rafts`; o jogador nela tem `PlayerState::raft`. |
 | `creatures.rs` / `taming.rs` | Fauna (IA contra vários jogadores, dono de domesticados, voadores, peso de carga), torpor e domesticação. |
 | `gathering.rs` / `combat.rs` | Rendimento de coleta; pedras do estilingue. |
@@ -65,7 +66,7 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 - Save: campo novo leva `#[serde(default)]`; quebrar o formato exige subir `SAVE_VERSION` e converter o antigo em `save.rs`.
 - Espécie nova: `Species` + seus `match` + `render::draw_creature`. Voadora: `fly_speed` (no ar, colisão só com a borda do mapa; ver `Creature::flying`). Onde pisa: `Species::terrain` (terra, anfíbio, só lagoa, mar, debaixo da areia). Criaturas são referenciadas por `id`, nunca por índice guardado.
 - Voar não é salvo: ao carregar ou ao descer à força (morte, saída), voadores e jogadores vão para o chão livre mais próximo (`World::find_near`).
-- Estrutura nova: `StructureKind` + item + `render::draw_structure` + `render::structure_label` se for interativa.
+- Estrutura nova: `StructureKind` (com `piece`, `material` e `max_health`) + item + receita + `render::draw_structure` (e `ui::draw_piece_icon` se for peça de construção) + `render::structure_label` se for interativa. Estruturas são referenciadas por índice em `world.structures`: quem remove (demolir, destruir) fecha os painéis de estrutura abertos.
 - Código e identificadores em inglês; textos do jogo e docs em português.
 - Antes de concluir: `cargo test`, `cargo clippy` sem warnings e um `ISLAND_SHOT` quando mexer em render/UI.
 - CI roda `fmt --check`, `clippy -D warnings` e testes. Publicar uma release dispara `release.yml` (builds de Windows/Linux/macOS).

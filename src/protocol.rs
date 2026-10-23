@@ -15,7 +15,7 @@ use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -102,10 +102,12 @@ pub enum Command {
     Drop {
         all: bool,
     },
-    /// F: pegar bolsa, abrir porta/baú/fogueira/dino, desmontar.
+    /// F: pegar bolsa, abrir porta/portão/baú/fogueira/dino, deitar na cama, desmontar.
     Interact,
     Place {
         tile: (i32, i32),
+        /// Peças compridas (portão) na vertical (T gira).
+        vertical: bool,
     },
     Demolish {
         tile: (i32, i32),
@@ -130,7 +132,10 @@ pub enum Command {
     /// Espaço montado: voador decola/pousa, beelzebufo pula.
     MountAction,
     SpendAttribute(Attribute),
-    Respawn,
+    /// Renascer na praia ou na cama mais perto de onde morreu.
+    Respawn {
+        bed: bool,
+    },
     /// Ordem para toda a tribo por perto (Z, C, B, V).
     Whistle(Whistle),
     /// Ordem para o NPC com o painel aberto (ou recrutá-lo).

@@ -4,7 +4,7 @@
 
 use macroquad::math::{Vec2, vec2};
 
-use crate::building::{self, Layer, PlaceError, StructureKind};
+use crate::building::{self, Layer, PlaceError, Structure, StructureKind};
 use crate::combat::{self, Projectile};
 use crate::crafting::{self, CraftError, CraftQueue, RECIPES, Recipe};
 use crate::creatures::{
@@ -28,6 +28,7 @@ use crate::slots;
 use crate::vitals::{self, Vitals};
 use crate::world::{BagKind, GroundBag, NodeKind, TILE, Tile, World};
 
+mod raid;
 mod tribe;
 
 pub const MAP_SIZE: usize = 160;
@@ -45,7 +46,14 @@ const RIDE_SPRINT: f32 = 1.3;
 pub enum Target {
     Node(usize),
     Creature(usize),
+    /// Com o martelo na mão: estrutura a reparar.
+    Structure(usize),
+    /// Saqueador, pelo `id`.
+    Npc(u32),
 }
+
+/// Raio de acerto de um NPC (o corpo é do tamanho de um jogador).
+pub const NPC_HIT_RADIUS: f32 = 8.0;
 
 /// Algo com que o jogador pode interagir com F.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,13 +71,40 @@ pub enum Interaction {
 // ---------- Consultas compartilhadas com o cliente (anel de alvo, dicas "[F]") ----------
 
 /// Alvo mais próximo ao alcance, preferindo o que está à frente do personagem.
-/// Criaturas vivas têm prioridade sobre recursos; carcaças contam como recurso.
-pub fn find_target(world: &World, creatures: &[Creature], p: &Player, held: Option<ItemId>) -> Option<Target> {
+/// Criaturas vivas e saqueadores (`foes`: `id` e posição) têm prioridade sobre recursos; carcaças contam
+/// como recurso. Com o martelo, só estruturas (as danificadas primeiro).
+pub fn find_target(
+    world: &World,
+    creatures: &[Creature],
+    foes: &[(u32, Vec2)],
+    p: &Player,
+    held: Option<ItemId>,
+) -> Option<Target> {
+    let behind = |pos: Vec2| (pos.x - p.pos.x) * p.facing.sign() < -4.0;
+    if held == Some(ItemId::Hammer) {
+        return world
+            .structures
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.kind.layer() != Layer::Roof)
+            .filter_map(|(i, s)| {
+                let gap = building::distance_to_rect(p.pos, s.rect());
+                let mut score = gap + if behind(s.rect().center()) { 20.0 } else { 0.0 };
+                if s.health_frac() >= 1.0 {
+                    score += 15.0;
+                }
+                if s.kind.layer() == Layer::Floor {
+                    score += 10.0;
+                }
+                (gap <= player::REACH).then_some((score, Target::Structure(i)))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, t)| t);
+    }
     let weapon_reach = player::REACH + ItemId::reach_bonus(held);
     let score = |pos: Vec2, radius: f32, reach: f32| {
         let gap = pos.distance(p.pos) - radius;
-        let behind = (pos.x - p.pos.x) * p.facing.sign() < -4.0;
-        (gap <= reach).then_some(gap + if behind { 20.0 } else { 0.0 })
+        (gap <= reach).then_some(gap + if behind(pos) { 20.0 } else { 0.0 })
     };
     let nodes = world
         .nodes
@@ -91,15 +126,27 @@ pub fn find_target(world: &World, creatures: &[Creature], p: &Player, held: Opti
             };
             score(c.pos, c.species.radius(), reach).map(|s| (s - bonus, Target::Creature(i)))
         });
+    let foes = foes
+        .iter()
+        .filter_map(|&(id, pos)| score(pos, NPC_HIT_RADIUS, weapon_reach).map(|s| (s - 10.0, Target::Npc(id))));
     nodes
         .chain(creatures)
+        .chain(foes)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, t)| t)
 }
 
 /// Posição e raio do alvo, para o anel de destaque.
-pub fn target_ring(world: &World, creatures: &[Creature], target: Target) -> (Vec2, f32) {
+pub fn target_ring(world: &World, creatures: &[Creature], foes: &[(u32, Vec2)], target: Target) -> (Vec2, f32) {
     match target {
+        Target::Structure(i) => {
+            let r = world.structures[i].rect();
+            (vec2(r.center().x, r.bottom() - 4.0), r.w.max(r.h) / 2.0 + 4.0)
+        }
+        Target::Npc(id) => {
+            let pos = foes.iter().find(|f| f.0 == id).map_or(Vec2::ZERO, |f| f.1);
+            (pos, NPC_HIT_RADIUS + 6.0)
+        }
         Target::Node(i) => {
             let n = &world.nodes[i];
             (n.pos, n.kind.collision_radius().max(8.0) + 6.0)
@@ -302,6 +349,8 @@ pub struct Sim {
     next_npc_id: u32,
     /// Tempo até os acampamentos repovoarem.
     camp_timer: f32,
+    /// Tempo até a próxima tentativa de ataque de saqueadores.
+    raid_timer: f32,
     next_player_id: PlayerId,
     rng: Rng,
     spawn_timer: f32,
@@ -338,6 +387,7 @@ impl Sim {
             npcs: Vec::new(),
             next_npc_id: 1,
             camp_timer: 0.0,
+            raid_timer: raid::FIRST_RAID,
             next_player_id: 1,
             rng,
             spawn_timer: RESPAWN_SECS,
@@ -349,8 +399,22 @@ impl Sim {
         sim
     }
 
+    /// NPCs com quem dá para falar (F): moradores e membros.
     fn npc_spots(&self) -> Vec<(u32, Vec2)> {
-        self.npcs.iter().map(|n| (n.id, n.pos())).collect()
+        self.npcs
+            .iter()
+            .filter(|n| !n.hostile)
+            .map(|n| (n.id, n.pos()))
+            .collect()
+    }
+
+    /// Saqueadores vivos (alvos de golpes e pedras).
+    fn raider_spots(&self) -> Vec<(u32, Vec2)> {
+        self.npcs
+            .iter()
+            .filter(|n| n.hostile && n.is_alive())
+            .map(|n| (n.id, n.pos()))
+            .collect()
     }
 
     pub fn seed(&self) -> u64 {
@@ -428,7 +492,8 @@ impl Sim {
         data.creatures = Some(self.creatures.iter().map(CreatureSave::from).collect());
         data.players = self.players.iter().map(PlayerState::to_save).collect();
         data.players.extend(self.offline.iter().cloned());
-        data.npcs = Some(self.npcs.iter().map(NpcSave::from).collect());
+        // Saqueadores não vão para o save (o ataque acaba ao fechar o jogo).
+        data.npcs = Some(self.npcs.iter().filter(|n| !n.hostile).map(NpcSave::from).collect());
         data.rafts = self
             .rafts
             .iter()
@@ -646,6 +711,9 @@ impl Sim {
         self.update_creatures(dt);
         self.update_npcs(dt);
         self.update_tamed_combat(dt);
+        self.update_raids(dt);
+        self.reap_npcs();
+        self.remove_destroyed_structures();
         for pi in 0..self.players.len() {
             self.validate_container(pi);
         }
@@ -732,13 +800,15 @@ impl Sim {
                 alive: !p.dead,
                 name: &p.name,
                 airborne: p.mount.is_some_and(|id| flying_mounts.contains(&id)),
+                sheltered: self.world.sheltered(p.player.pos),
             })
             .collect();
-        ai_players.extend(self.npcs.iter().filter(|n| n.owner.is_some()).map(|n| AiPlayer {
+        ai_players.extend(self.npcs.iter().filter(|n| n.is_member()).map(|n| AiPlayer {
             pos: n.pos(),
-            alive: true,
+            alive: n.is_alive(),
             name: tribe::NPC_AI_NAME,
             airborne: false,
+            sheltered: self.world.sheltered(n.pos()),
         }));
         let input = AiInput { players: &ai_players };
         let mut bites = Vec::new();
@@ -772,7 +842,7 @@ impl Sim {
                     self.take_bite(target, damage);
                 }
             } else if let Some(&id) = members.get(target - players) {
-                self.hurt_npc(id, damage);
+                self.hurt_npc(id, damage, None);
             }
         }
 
@@ -861,12 +931,67 @@ impl Sim {
                 }
                 self.popup(pos - vec2(0.0, 30.0), "Domesticado!".to_owned());
             }
+            Event::Smash { structure, damage } => self.damage_structure(structure, damage),
             Event::Bite { .. } => {}
+        }
+    }
+
+    // ---------- Estruturas atacadas ----------
+
+    /// Dano de criatura ou saqueador numa estrutura (o material reduz). Ela sai do mundo no fim do tick.
+    pub(super) fn damage_structure(&mut self, i: usize, damage: f32) {
+        let Some(s) = self.world.structures.get_mut(i) else {
+            return;
+        };
+        if s.health <= 0.0 {
+            return;
+        }
+        let before = s.health;
+        s.take_damage(damage);
+        let (lost, r) = (before - s.health.max(0.0), s.rect());
+        if lost >= 1.0 {
+            let at = vec2(r.center().x, r.y - 30.0);
+            self.popup_styled(at, format!("-{lost:.0}"), PopupStyle::Hurt);
+        }
+    }
+
+    /// Tira do mundo as estruturas que chegaram a 0 de vida (o conteúdo cai numa bolsa).
+    fn remove_destroyed_structures(&mut self) {
+        if self.world.structures.iter().all(|s| s.health > 0.0) {
+            return;
+        }
+        // Painéis de estruturas abertos fecham (os índices mudam).
+        for pj in 0..self.players.len() {
+            if matches!(self.players[pj].container, Some(ContainerRef::Structure(_))) {
+                self.close_container(pj);
+            }
+        }
+        let mut destroyed = Vec::new();
+        self.world.structures.retain_mut(|s| {
+            if s.health > 0.0 {
+                return true;
+            }
+            let stacks: Vec<Stack> = s
+                .storage
+                .take()
+                .map(|inv| inv.slots.into_iter().flatten().collect())
+                .unwrap_or_default();
+            destroyed.push((s.rect().center(), s.kind.item().name(), stacks));
+            false
+        });
+        for (center, name, stacks) in destroyed {
+            self.world.drop_bag(center, stacks, BagKind::Dropped);
+            for pi in 0..self.players.len() {
+                if self.players[pi].player.pos.distance(center) < 900.0 {
+                    self.notify(pi, format!("Estrutura destruída: {name}"));
+                }
+            }
         }
     }
 
     fn update_projectiles(&mut self, dt: f32) {
         let mut hits = Vec::new();
+        let mut raider_hits = Vec::new();
         // Subpassos curtos para a pedra não atravessar alvos quando o frame demora.
         let substeps = (dt * combat::SLINGSHOT_SPEED / 4.0).ceil().max(1.0) as usize;
         let sub_dt = dt / substeps as f32;
@@ -882,9 +1007,21 @@ impl Sim {
                     hits.push((i, stone.damage, stone.torpor, stone.owner, stone.pos - stone.vel));
                     return false;
                 }
+                let raider = self
+                    .npcs
+                    .iter()
+                    .find(|n| n.hostile && n.is_alive() && stone.hits(n.pos(), NPC_HIT_RADIUS));
+                if let Some(n) = raider {
+                    raider_hits.push((n.id, stone.damage * 3.0, stone.owner));
+                    return false;
+                }
             }
             true
         });
+        for (id, damage, owner) in raider_hits {
+            let shooter = self.index(owner);
+            self.hurt_npc(id, damage, shooter);
+        }
         for (i, damage, torpor, owner, from) in hits {
             let hit = self.creatures[i].take_hit(damage, torpor, from);
             let shooter = self.index(owner);
@@ -1245,8 +1382,9 @@ impl Sim {
             self.fire_slingshot(pi);
             return;
         }
+        let foes = self.raider_spots();
         let p = &self.players[pi];
-        let target = find_target(&self.world, &self.creatures, &p.player, p.equipped());
+        let target = find_target(&self.world, &self.creatures, &foes, &p.player, p.equipped());
         if target.is_none() && self.near_water(pi) {
             self.drink(pi);
             return;
@@ -1259,8 +1397,50 @@ impl Sim {
         match target {
             Some(Target::Node(i)) => self.hit_node(pi, i),
             Some(Target::Creature(i)) => self.hit_creature(pi, i),
+            Some(Target::Structure(i)) => self.repair_structure(pi, i),
+            Some(Target::Npc(id)) => self.hit_npc(pi, id),
             None => {}
         }
+    }
+
+    /// Golpe num saqueador.
+    fn hit_npc(&mut self, pi: usize, id: u32) {
+        let Some(ni) = self.npc_index(id) else { return };
+        let p = &self.players[pi];
+        let held = p.equipped();
+        let damage = ItemId::melee_damage(held) * p.progression.melee_mult();
+        let pos = self.npcs[ni].pos();
+        self.players[pi].player.face_towards(pos.x);
+        if held.is_some_and(|item| item.max_durability().is_some()) {
+            self.wear_equipped(pi);
+        }
+        self.popup_styled(pos - vec2(0.0, 36.0), format!("-{damage:.0}"), PopupStyle::Damage);
+        self.hurt_npc(id, damage, Some(pi));
+    }
+
+    /// Martelada: repara 1/4 da vida gastando 1/4 dos materiais da receita.
+    fn repair_structure(&mut self, pi: usize, i: usize) {
+        let s = &self.world.structures[i];
+        let (kind, r) = (s.kind, s.rect());
+        self.players[pi].player.face_towards(r.center().x);
+        if s.health >= kind.max_health() {
+            self.notify(pi, format!("{} já está inteira", kind.item().name()));
+            return;
+        }
+        let cost = kind.repair_cost();
+        let inv = &self.players[pi].inventory;
+        if let Some(&(item, n)) = cost.iter().find(|&&(item, n)| inv.count(item) < n) {
+            self.notify(pi, format!("Para reparar: {n} {}", item.name()));
+            return;
+        }
+        for &(item, n) in &cost {
+            self.players[pi].inventory.remove(item, n);
+        }
+        let healed = self.world.structures[i].repair();
+        self.wear_equipped(pi);
+        self.gain_xp(pi, 1);
+        let at = vec2(r.center().x, r.y - 30.0);
+        self.popup(at, format!("+{healed:.0} reparo"));
     }
 
     /// Dispara uma pedra na direção do cursor (clique) ou para a frente (E).
@@ -1408,21 +1588,41 @@ impl Sim {
 
     // ---------- Construção ----------
 
-    fn place_selected_at(&mut self, pi: usize, tile: (i32, i32)) -> Result<(), PlaceError> {
+    fn place_selected_at(&mut self, pi: usize, tile: (i32, i32), vertical: bool) -> Result<(), PlaceError> {
         let p = &self.players[pi];
         let Some(kind) = p.equipped().and_then(ItemId::structure) else {
             return Ok(());
         };
-        // Ninguém pode estar no lugar de algo que bloqueia passagem.
-        for other in &self.players {
+        let vertical = vertical && kind.rotates();
+        // Ninguém (jogador, NPC ou criatura) pode estar no lugar de algo que bloqueia passagem.
+        let bodies = self
+            .players
+            .iter()
+            .map(|o| (o.player.pos, player::RADIUS))
+            .chain(self.npcs.iter().map(|n| (n.pos(), player::RADIUS)))
+            .chain(
+                self.creatures
+                    .iter()
+                    .filter(|c| !c.flying && c.corpse.is_none())
+                    .map(|c| (c.pos, c.species.radius())),
+            );
+        for (pos, radius) in bodies {
             self.world
-                .can_place(kind, tile, other.player.pos, player::RADIUS)
+                .can_place_oriented(kind, tile, vertical, pos, radius)
                 .or_else(|e| if e == PlaceError::TooFar { Ok(()) } else { Err(e) })?;
         }
-        self.world.can_place(kind, tile, p.player.pos, player::RADIUS)?;
-        self.world.place(kind, tile);
+        self.world
+            .can_place_oriented(kind, tile, vertical, p.player.pos, player::RADIUS)?;
+        self.world.place_structure(Structure {
+            vertical,
+            owner: Some(p.name.clone()),
+            ..Structure::new(kind, tile)
+        });
         let p = &mut self.players[pi];
         p.inventory.take_from_slot(p.hotbar_selected, 1);
+        if kind == StructureKind::Bed {
+            self.notify(pi, "Cama posicionada: você pode renascer nela");
+        }
         Ok(())
     }
 
@@ -1435,6 +1635,7 @@ impl Sim {
         let Some(i) = self
             .world
             .structure_at(tile, Layer::Object)
+            .or_else(|| self.world.structure_at(tile, Layer::Roof))
             .or_else(|| self.world.structure_at(tile, Layer::Floor))
         else {
             return false;
@@ -1452,10 +1653,18 @@ impl Sim {
             self.world.drop_bag(center, stacks, BagKind::Dropped);
         }
         let item = s.kind.item();
+        // Muito danificada, não sobra nada para reaproveitar.
+        if s.health_frac() < 0.5 {
+            self.notify(
+                pi,
+                format!("Desmontado: {} (danificado demais, sem devolver)", item.name()),
+            );
+            return true;
+        }
         if let Some(left) = self.players[pi].inventory.insert_stack(Stack::new(item, 1)) {
             self.world.drop_bag(center, vec![left], BagKind::Dropped);
         }
-        self.notify(pi, format!("{} desmontada", item.name()));
+        self.notify(pi, format!("Desmontado: {}", item.name()));
         true
     }
 
@@ -1465,12 +1674,17 @@ impl Sim {
         match target {
             Interaction::Bag(i) => self.pick_up(pi, i),
             Interaction::Structure(i) => match self.world.structures[i].kind {
-                StructureKind::WoodDoor => self.toggle_door(pi, i),
+                kind if kind.opens() => self.toggle_door(pi, i),
                 StructureKind::StorageBox | StructureKind::Campfire | StructureKind::Forge => {
                     self.close_container(pi);
                     self.players[pi].container = Some(ContainerRef::Structure(i));
                 }
-                StructureKind::Workbench | StructureKind::WoodFoundation | StructureKind::WoodWall => {}
+                StructureKind::Bed => {
+                    let name = self.players[pi].name.clone();
+                    self.world.structures[i].owner = Some(name);
+                    self.notify(pi, "Esta cama agora é seu ponto de renascer");
+                }
+                _ => {}
             },
             Interaction::Creature(id) => {
                 self.close_container(pi);
@@ -1489,9 +1703,14 @@ impl Sim {
         let door = &self.world.structures[i];
         let mut closed = door.clone();
         closed.open = false;
-        let blocked = self.players.iter().any(|p| closed.blocks(p.player.pos, player::RADIUS));
+        let blocked = self.players.iter().any(|p| closed.blocks(p.player.pos, player::RADIUS))
+            || self.npcs.iter().any(|n| closed.blocks(n.pos(), player::RADIUS))
+            || self
+                .creatures
+                .iter()
+                .any(|c| !c.flying && closed.blocks(c.pos, c.species.radius()));
         if door.open && blocked {
-            self.notify(pi, "Tem alguém na porta");
+            self.notify(pi, "Tem alguém na passagem");
             return;
         }
         let door = &mut self.world.structures[i];
@@ -1578,16 +1797,44 @@ impl Sim {
         self.broadcast(format!("{name} morreu"));
     }
 
-    fn respawn(&mut self, pi: usize) {
-        let spawn = self.world.spawn;
-        let p = &mut self.players[pi];
-        if !p.dead {
+    /// Cama do jogador mais perto de onde ele morreu.
+    fn bed_of(&self, pi: usize) -> Option<usize> {
+        let p = &self.players[pi];
+        self.world
+            .structures
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.kind == StructureKind::Bed && s.owner.as_ref() == Some(&p.name))
+            .min_by(|a, b| {
+                let (da, db) = (
+                    a.1.rect().center().distance(p.player.pos),
+                    b.1.rect().center().distance(p.player.pos),
+                );
+                da.total_cmp(&db)
+            })
+            .map(|(i, _)| i)
+    }
+
+    /// Renasce na praia ou, com `bed`, ao lado da sua cama mais perto de onde morreu.
+    fn respawn(&mut self, pi: usize, bed: bool) {
+        if !self.players[pi].dead {
             return;
         }
-        p.player = Player::new(spawn);
+        let at_bed = bed.then(|| self.bed_of(pi)).flatten().and_then(|i| {
+            let r = self.world.structures[i].rect();
+            self.world.find_near(vec2(r.center().x, r.bottom() + 10.0), |q| {
+                !self.world.blocked(q, player::RADIUS)
+            })
+        });
+        let p = &mut self.players[pi];
+        p.player = Player::new(at_bed.unwrap_or(self.world.spawn));
         p.vitals = Vitals::full_with(p.progression.maxima());
         p.dead = false;
-        self.notify(pi, "Você renasceu na praia. Recupere sua bolsa!");
+        match at_bed {
+            Some(_) => self.notify(pi, "Você renasceu na sua cama. Recupere sua bolsa!"),
+            None if bed => self.notify(pi, "Você não tem cama: renasceu na praia"),
+            None => self.notify(pi, "Você renasceu na praia. Recupere sua bolsa!"),
+        }
     }
 
     fn craft(&mut self, pi: usize, index: usize) {
@@ -1627,7 +1874,7 @@ impl Sim {
 
     pub fn command(&mut self, id: PlayerId, cmd: Command) {
         let Some(pi) = self.index(id) else { return };
-        if self.players[pi].dead && !matches!(cmd, Command::Respawn | Command::Chat(_)) {
+        if self.players[pi].dead && !matches!(cmd, Command::Respawn { .. } | Command::Chat(_)) {
             return;
         }
         match cmd {
@@ -1672,10 +1919,10 @@ impl Sim {
                     self.leave_raft(pi);
                 }
             }
-            Command::Place { tile } => {
+            Command::Place { tile, vertical } => {
                 if self.players[pi].mount.is_none()
                     && self.players[pi].raft.is_none()
-                    && let Err(e) = self.place_selected_at(pi, tile)
+                    && let Err(e) = self.place_selected_at(pi, tile, vertical)
                 {
                     self.notify(pi, e.message());
                 }
@@ -1725,7 +1972,7 @@ impl Sim {
                     p.vitals.set_max(p.progression.maxima());
                 }
             }
-            Command::Respawn => self.respawn(pi),
+            Command::Respawn { bed } => self.respawn(pi, bed),
             Command::Whistle(whistle) => self.whistle(pi, whistle),
             Command::NpcOrder(cmd) => self.npc_order(pi, cmd),
             Command::Chat(text) => {
@@ -1880,6 +2127,84 @@ impl Sim {
             }
             fire.toggle_fire();
         }
+    }
+
+    /// Base de pedra ao norte do spawn: portão grande, janelas, porta de metal, teto em metade,
+    /// móveis, tochas, cerca e uma parede danificada. O jogador fica dentro, com o martelo.
+    pub fn demo_fortress(&mut self) {
+        self.creatures.clear();
+        let (sx, sy) = building::tile_of(self.world.spawn);
+        let (x0, x1, y0, y1) = (sx - 4, sx + 4, sy - 9, sy - 4);
+        let name = self.players[0].name.clone();
+        let world = &mut self.world;
+        // Limpa o terreno (árvores e pedras) para a base caber.
+        let area = building::tile_rect((x0 - 1, y0 - 1));
+        let area = macroquad::math::Rect::new(area.x, area.y, (x1 - x0 + 3) as f32 * TILE, (y1 - y0 + 6) as f32 * TILE);
+        world.nodes.retain(|n| !area.contains(n.pos));
+        let mut place = |kind: StructureKind, tile: (i32, i32), vertical: bool| {
+            let free = building::footprint_tiles(kind, tile, vertical)
+                .iter()
+                .all(|t| world.tile(t.0, t.1).is_land() && world.structure_at(*t, kind.layer()).is_none());
+            if free {
+                world.place_structure(Structure {
+                    vertical,
+                    owner: Some(name.clone()),
+                    ..Structure::new(kind, tile)
+                });
+            }
+        };
+        place(StructureKind::StoneGate, (sx, y1), false);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                place(StructureKind::StoneFoundation, (x, y), false);
+                let edge = x == x0 || x == x1 || y == y0 || y == y1;
+                if !edge {
+                    continue;
+                }
+                let kind = if (x == x0 || x == x1) && y == y0 + 2 {
+                    StructureKind::StoneWindow
+                } else if y == y0 && x == sx + 2 {
+                    StructureKind::MetalDoor
+                } else if y == y0 && x == sx - 2 {
+                    StructureKind::MetalWall
+                } else {
+                    StructureKind::StoneWall
+                };
+                place(kind, (x, y), false);
+            }
+        }
+        for y in y0..=y1 {
+            for x in x0..sx {
+                place(StructureKind::StoneRoof, (x, y), false);
+            }
+        }
+        for (kind, tile) in [
+            (StructureKind::Bed, (x1 - 1, y0 + 1)),
+            (StructureKind::Rug, (sx + 1, y0 + 3)),
+            (StructureKind::Table, (sx + 2, y0 + 2)),
+            (StructureKind::Chair, (sx + 1, y0 + 2)),
+            (StructureKind::FlowerPot, (x1 - 1, y1 - 1)),
+            (StructureKind::StorageBox, (sx + 1, y0 + 1)),
+            (StructureKind::Torch, (sx - 2, y1 + 1)),
+            (StructureKind::Torch, (sx + 2, y1 + 1)),
+        ] {
+            place(kind, tile, false);
+        }
+        for x in x0 - 1..=x1 + 1 {
+            if (x - sx).abs() > 2 {
+                place(StructureKind::WoodFence, (x, y1 + 2), false);
+            }
+        }
+        place(StructureKind::WoodFence, (x0 - 1, y1 + 1), false);
+        place(StructureKind::WoodFence, (x1 + 1, y1 + 1), false);
+        if let Some(i) = self.world.structure_at((x1, y0 + 4), Layer::Object) {
+            self.world.structures[i].health *= 0.4;
+        }
+        let p = &mut self.players[0];
+        p.player.pos = building::tile_rect((sx + 1, y0 + 4)).center() + vec2(8.0, 0.0);
+        p.inventory.add(ItemId::Hammer, 1);
+        p.inventory.add(ItemId::Stone, 40);
+        p.inventory.add(ItemId::Wood, 20);
     }
 
     /// Abre o painel da primeira fogueira do mundo.
@@ -2464,7 +2789,7 @@ mod tests {
         let mut wild = Creature::new(Species::Pteranodon, pos + vec2(10.0, 0.0));
         wild.flying = true;
         let p = Player::new(pos);
-        assert_eq!(find_target(&sim.world, &[wild], &p, None), None);
+        assert_eq!(find_target(&sim.world, &[wild], &[], &p, None), None);
     }
 
     #[test]
@@ -2594,10 +2919,10 @@ mod tests {
         let mut worm = Creature::new(Species::Deathworm, pos + vec2(10.0, 0.0));
         assert!(worm.buried);
         let p = &sim.players[0].player;
-        let target = find_target(&sim.world, std::slice::from_ref(&worm), p, None);
+        let target = find_target(&sim.world, std::slice::from_ref(&worm), &[], p, None);
         assert!(!matches!(target, Some(Target::Creature(_))), "enterrado não é alvo");
         worm.buried = false;
-        let target = find_target(&sim.world, std::slice::from_ref(&worm), p, None);
+        let target = find_target(&sim.world, std::slice::from_ref(&worm), &[], p, None);
         assert_eq!(target, Some(Target::Creature(0)), "exposto, vira alvo");
     }
 
@@ -2683,8 +3008,74 @@ mod tests {
         assert!(sim.players[0].dead);
         let bag = sim.world.bags.iter().find(|b| b.kind == BagKind::Death).unwrap();
         assert_eq!(bag.stacks[0].count, 10);
-        sim.command(ids[0], Command::Respawn);
+        sim.command(ids[0], Command::Respawn { bed: false });
         assert!(!sim.players[0].dead);
+    }
+
+    #[test]
+    fn bed_is_a_respawn_point() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        sim.demo_fortress();
+        let bed = sim
+            .world
+            .structures
+            .iter()
+            .find(|s| s.kind == StructureKind::Bed)
+            .unwrap();
+        assert_eq!(bed.owner.as_deref(), Some("Ana"));
+        let bed_pos = bed.rect().center();
+        sim.players[0].player.pos = sim.world.spawn + vec2(0.0, 300.0);
+        sim.kill();
+        sim.command(ids[0], Command::Respawn { bed: true });
+        assert!(sim.players[0].player.pos.distance(bed_pos) < 60.0, "renasceu na cama");
+        assert!(!sim.world.blocked(sim.players[0].player.pos, player::RADIUS));
+    }
+
+    #[test]
+    fn hammer_repairs_with_materials_and_ruins_are_not_refunded() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        let here = building::tile_of(sim.players[0].player.pos);
+        let tile = (here.0 + 1, here.1);
+        sim.world.place(StructureKind::StoneWall, tile);
+        sim.world.structures[0].health = 100.0;
+        sim.players[0].inventory.add(ItemId::Hammer, 1);
+        sim.players[0].hotbar_selected = 0;
+        sim.players[0].player.facing = Facing::Right;
+        sim.players[0].input.attack = true;
+        sim.tick(1.0 / 60.0);
+        assert_eq!(sim.world.structures[0].health, 100.0, "sem pedra não repara");
+        sim.players[0].inventory.add(ItemId::Stone, 40);
+        sim.players[0].inventory.add(ItemId::Wood, 10);
+        for _ in 0..60 {
+            sim.tick(1.0 / 60.0);
+        }
+        sim.players[0].input.attack = false;
+        assert!(sim.world.structures[0].health > 100.0, "o martelo reparou");
+        assert!(sim.players[0].inventory.count(ItemId::Stone) < 40, "gastou pedra");
+
+        // Danificada demais, desmontar não devolve.
+        sim.world.structures[0].health = 50.0;
+        let walls = sim.players[0].inventory.count(ItemId::StoneWall);
+        sim.command(ids[0], Command::Demolish { tile });
+        assert!(sim.world.structures.is_empty());
+        assert_eq!(sim.players[0].inventory.count(ItemId::StoneWall), walls);
+    }
+
+    #[test]
+    fn destroyed_box_drops_its_contents() {
+        let (mut sim, _) = sim_with(&["Ana"]);
+        let here = building::tile_of(sim.players[0].player.pos);
+        sim.world.place(StructureKind::StorageBox, (here.0 + 2, here.1));
+        sim.world.structures[0].storage.as_mut().unwrap().add(ItemId::Flint, 7);
+        sim.damage_structure(0, 10_000.0);
+        sim.tick(1.0 / 60.0);
+        assert!(sim.world.structures.is_empty());
+        assert!(
+            sim.world
+                .bags
+                .iter()
+                .any(|b| b.stacks.iter().any(|s| s.item == ItemId::Flint && s.count == 7))
+        );
     }
 
     #[test]

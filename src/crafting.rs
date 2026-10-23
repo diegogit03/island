@@ -23,6 +23,46 @@ pub struct Recipe {
 
 const BENCH: Option<StructureKind> = Some(StructureKind::Workbench);
 
+/// Aba do painel de crafting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Category {
+    #[default]
+    Items,
+    Building,
+    Saddles,
+}
+
+impl Category {
+    pub const ALL: [Category; 3] = [Category::Items, Category::Building, Category::Saddles];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Items => "Itens",
+            Category::Building => "Construção",
+            Category::Saddles => "Selas",
+        }
+    }
+}
+
+impl Recipe {
+    pub fn category(&self) -> Category {
+        if self.output.structure().is_some() || self.output == ItemId::Hammer {
+            Category::Building
+        } else if self.output.is_saddle() {
+            Category::Saddles
+        } else {
+            Category::Items
+        }
+    }
+}
+
+/// Índices (em `RECIPES`) das receitas de uma aba.
+pub fn recipes_in(category: Category) -> Vec<usize> {
+    (0..RECIPES.len())
+        .filter(|&i| RECIPES[i].category() == category)
+        .collect()
+}
+
 pub const RECIPES: &[Recipe] = &[
     Recipe {
         output: ItemId::StonePickaxe,
@@ -150,6 +190,213 @@ pub const RECIPES: &[Recipe] = &[
         station: BENCH,
         level: 4,
         engram_cost: 3,
+    },
+    Recipe {
+        output: ItemId::WoodFence,
+        count: 1,
+        inputs: &[(ItemId::Wood, 3), (ItemId::Thatch, 2)],
+        secs: 1.0,
+        station: None,
+        level: 3,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::Torch,
+        count: 1,
+        inputs: &[(ItemId::Wood, 2), (ItemId::Thatch, 4), (ItemId::Flint, 1)],
+        secs: 1.0,
+        station: None,
+        level: 2,
+        engram_cost: 1,
+    },
+    Recipe {
+        output: ItemId::Hammer,
+        count: 1,
+        inputs: &[(ItemId::Wood, 4), (ItemId::Stone, 4), (ItemId::Thatch, 6)],
+        secs: 2.0,
+        station: None,
+        level: 4,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::WoodWindow,
+        count: 1,
+        inputs: &[(ItemId::Wood, 5), (ItemId::Thatch, 3)],
+        secs: 2.0,
+        station: BENCH,
+        level: 5,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::WoodRoof,
+        count: 1,
+        inputs: &[(ItemId::Wood, 4), (ItemId::Thatch, 8)],
+        secs: 2.0,
+        station: BENCH,
+        level: 5,
+        engram_cost: 3,
+    },
+    Recipe {
+        output: ItemId::WoodGate,
+        count: 1,
+        inputs: &[(ItemId::Wood, 30), (ItemId::Thatch, 12)],
+        secs: 5.0,
+        station: BENCH,
+        level: 6,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::Bed,
+        count: 1,
+        inputs: &[(ItemId::Hide, 10), (ItemId::Thatch, 25), (ItemId::Wood, 10)],
+        secs: 4.0,
+        station: BENCH,
+        level: 5,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::Table,
+        count: 1,
+        inputs: &[(ItemId::Wood, 20)],
+        secs: 3.0,
+        station: BENCH,
+        level: 6,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::Chair,
+        count: 1,
+        inputs: &[(ItemId::Wood, 10)],
+        secs: 2.0,
+        station: BENCH,
+        level: 6,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::Rug,
+        count: 1,
+        inputs: &[(ItemId::Hide, 8), (ItemId::Thatch, 10)],
+        secs: 2.0,
+        station: BENCH,
+        level: 6,
+        engram_cost: 2,
+    },
+    Recipe {
+        output: ItemId::FlowerPot,
+        count: 1,
+        inputs: &[(ItemId::Stone, 6), (ItemId::Berry, 3)],
+        secs: 2.0,
+        station: BENCH,
+        level: 6,
+        engram_cost: 1,
+    },
+    Recipe {
+        output: ItemId::StoneFoundation,
+        count: 1,
+        inputs: &[(ItemId::Stone, 20), (ItemId::Wood, 4)],
+        secs: 3.0,
+        station: BENCH,
+        level: 10,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::StoneWall,
+        count: 1,
+        inputs: &[(ItemId::Stone, 16), (ItemId::Wood, 2)],
+        secs: 3.0,
+        station: BENCH,
+        level: 10,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::StoneDoor,
+        count: 1,
+        inputs: &[(ItemId::Stone, 12), (ItemId::Wood, 4), (ItemId::Hide, 1)],
+        secs: 3.0,
+        station: BENCH,
+        level: 10,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::StoneWindow,
+        count: 1,
+        inputs: &[(ItemId::Stone, 12), (ItemId::Wood, 2)],
+        secs: 3.0,
+        station: BENCH,
+        level: 11,
+        engram_cost: 3,
+    },
+    Recipe {
+        output: ItemId::StoneRoof,
+        count: 1,
+        inputs: &[(ItemId::Stone, 14), (ItemId::Wood, 4)],
+        secs: 3.0,
+        station: BENCH,
+        level: 11,
+        engram_cost: 4,
+    },
+    Recipe {
+        output: ItemId::StoneGate,
+        count: 1,
+        inputs: &[(ItemId::Stone, 60), (ItemId::Wood, 15)],
+        secs: 8.0,
+        station: BENCH,
+        level: 12,
+        engram_cost: 6,
+    },
+    Recipe {
+        output: ItemId::MetalFoundation,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 6), (ItemId::Stone, 10)],
+        secs: 4.0,
+        station: BENCH,
+        level: 18,
+        engram_cost: 6,
+    },
+    Recipe {
+        output: ItemId::MetalWall,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 5), (ItemId::Stone, 4)],
+        secs: 4.0,
+        station: BENCH,
+        level: 18,
+        engram_cost: 6,
+    },
+    Recipe {
+        output: ItemId::MetalDoor,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 5), (ItemId::Wood, 2)],
+        secs: 4.0,
+        station: BENCH,
+        level: 18,
+        engram_cost: 6,
+    },
+    Recipe {
+        output: ItemId::MetalWindow,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 4), (ItemId::Stone, 2)],
+        secs: 4.0,
+        station: BENCH,
+        level: 19,
+        engram_cost: 5,
+    },
+    Recipe {
+        output: ItemId::MetalRoof,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 4), (ItemId::Stone, 4)],
+        secs: 4.0,
+        station: BENCH,
+        level: 19,
+        engram_cost: 6,
+    },
+    Recipe {
+        output: ItemId::MetalGate,
+        count: 1,
+        inputs: &[(ItemId::MetalIngot, 20), (ItemId::Stone, 10)],
+        secs: 10.0,
+        station: BENCH,
+        level: 20,
+        engram_cost: 8,
     },
     Recipe {
         output: ItemId::RaptorSaddle,

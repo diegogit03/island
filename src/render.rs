@@ -3,7 +3,9 @@
 
 use macroquad::prelude::*;
 
-use crate::building::{self, Structure, StructureKind};
+use std::collections::HashSet;
+
+use crate::building::{self, Material, Piece, Structure, StructureKind};
 use crate::creatures::{Creature, Species, State, Temperament, Terrain};
 use crate::items::ItemId;
 use crate::player::{Player, SWING_TIME};
@@ -139,14 +141,22 @@ pub fn draw_ground(world: &World, view: Rect, time: f32) {
         }
     }
 
-    for s in world
-        .structures
-        .iter()
-        .filter(|s| s.kind == StructureKind::WoodFoundation)
-    {
-        let r = s.rect();
-        if r.overlaps(&view) {
-            draw_foundation(r);
+    // Pisos e tapetes, rentes ao chão: antes de tudo (fundações primeiro).
+    for layer_floor in [true, false] {
+        for s in world
+            .structures
+            .iter()
+            .filter(|s| s.kind.flat() && (s.kind.layer() == building::Layer::Floor) == layer_floor)
+        {
+            let r = s.rect();
+            if !r.overlaps(&view) {
+                continue;
+            }
+            match s.kind.material() {
+                Some(m) if layer_floor => draw_foundation(r, m),
+                _ => draw_rug(r),
+            }
+            draw_structure_health(s);
         }
     }
 }
@@ -157,13 +167,49 @@ const WOOD_LINE: Color = Color::new(0.38, 0.25, 0.13, 1.0);
 /// Altura visual de paredes e portas (em pixels de mundo).
 const WALL_H: f32 = 24.0;
 
-fn draw_foundation(r: Rect) {
-    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.60, 0.43, 0.25, 1.0));
-    for i in 1..4 {
-        let y = r.y + i as f32 * r.h / 4.0;
-        draw_line(r.x, y, r.right(), y, 1.0, WOOD_LINE);
+fn draw_foundation(r: Rect, m: Material) {
+    match m {
+        Material::Wood => {
+            draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.60, 0.43, 0.25, 1.0));
+            for i in 1..4 {
+                let y = r.y + i as f32 * r.h / 4.0;
+                draw_line(r.x, y, r.right(), y, 1.0, WOOD_LINE);
+            }
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, WOOD_LINE);
+        }
+        Material::Stone => {
+            let (_, front, line) = material_colors(m);
+            draw_rectangle(r.x, r.y, r.w, r.h, shade(front, 1.1));
+            let half = r.w / 2.0;
+            draw_line(r.x + half, r.y, r.x + half, r.bottom(), 1.0, line);
+            draw_line(r.x, r.y + half, r.right(), r.y + half, 1.0, line);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, line);
+        }
+        Material::Metal => {
+            let (_, front, line) = material_colors(m);
+            draw_rectangle(r.x, r.y, r.w, r.h, shade(front, 1.15));
+            for (dx, dy) in [(4.0, 4.0), (r.w - 4.0, 4.0), (4.0, r.h - 4.0), (r.w - 4.0, r.h - 4.0)] {
+                draw_circle(r.x + dx, r.y + dy, 1.2, line);
+            }
+            draw_line(
+                r.x + 8.0,
+                r.y + 10.0,
+                r.right() - 8.0,
+                r.y + 10.0,
+                1.0,
+                shade(front, 0.9),
+            );
+            draw_line(
+                r.x + 8.0,
+                r.y + 22.0,
+                r.right() - 8.0,
+                r.y + 22.0,
+                1.0,
+                shade(front, 0.9),
+            );
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, line);
+        }
     }
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, WOOD_LINE);
 }
 
 /// Espuma nas bordas da água rasa que encostam em terra.
@@ -210,7 +256,16 @@ pub struct Avatar<'a> {
     pub name: Option<&'a str>,
     /// Barra de vida sob o nome (NPCs feridos).
     pub health: Option<f32>,
+    /// Saqueador: nome e barra em vermelho.
+    pub hostile: bool,
 }
+
+/// Aparência dos saqueadores: (camisa, cabelo, faixa).
+pub const RAIDER_LOOK: (Color, Color, Color) = (
+    Color::new(0.25, 0.20, 0.20, 1.0),
+    Color::new(0.08, 0.07, 0.07, 1.0),
+    Color::new(0.78, 0.12, 0.10, 1.0),
+);
 
 /// Cabelo dos jogadores.
 pub const PLAYER_HAIR: Color = Color::new(0.31, 0.2, 0.13, 1.0);
@@ -330,7 +385,7 @@ pub fn draw_entities(scene: &Scene) {
         world
             .structures
             .iter()
-            .filter(|s| s.kind != StructureKind::WoodFoundation && s.rect().overlaps(&culled))
+            .filter(|s| !s.kind.flat() && s.kind.layer() != building::Layer::Roof && s.rect().overlaps(&culled))
             .map(|s| (s.sort_y(), Drawable::Structure(s))),
     );
     list.extend(
@@ -390,7 +445,7 @@ pub fn draw_entities(scene: &Scene) {
         match d {
             Drawable::Node(n) => draw_node(n, player_pos, world.tile_at(n.pos)),
             Drawable::Bag(b) => draw_bag(b, time),
-            Drawable::Structure(s) => draw_structure(s, time),
+            Drawable::Structure(s) => draw_structure(world, s, time),
             Drawable::Creature(c) => draw_with_riders(c),
             Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, a.hair, a.band, 0.0),
             Drawable::Raft(r) => draw_raft(r, time),
@@ -570,10 +625,18 @@ pub fn bag_label(bag: &GroundBag) -> String {
     }
 }
 
-pub fn structure_label(s: &Structure) -> String {
+/// `me`: nome do jogador local (a cama dele diz que é dele).
+pub fn structure_label(s: &Structure, me: &str) -> String {
     match s.kind {
-        StructureKind::WoodDoor if s.open => "[F] Fechar porta".to_owned(),
-        StructureKind::WoodDoor => "[F] Abrir porta".to_owned(),
+        kind if kind.piece() == Piece::Gate && s.open => "[F] Fechar portão".to_owned(),
+        kind if kind.piece() == Piece::Gate => "[F] Abrir portão".to_owned(),
+        kind if kind.opens() && s.open => "[F] Fechar porta".to_owned(),
+        kind if kind.opens() => "[F] Abrir porta".to_owned(),
+        StructureKind::Bed => match s.owner.as_deref() {
+            Some(owner) if owner == me => "Sua cama (ponto de renascer)".to_owned(),
+            Some(owner) => format!("[F] Cama de {owner} (tornar sua)"),
+            None => "[F] Tornar esta cama sua".to_owned(),
+        },
         StructureKind::StorageBox => "[F] Abrir caixa".to_owned(),
         StructureKind::Workbench => "[F] Usar bancada".to_owned(),
         StructureKind::Campfire if s.is_lit() => "[F] Abrir fogueira (acesa)".to_owned(),
@@ -599,31 +662,98 @@ pub fn draw_prompt(label: &str, world_pos: Vec2, camera: &Camera2D) {
     draw_text(label, at.x - w / 2.0, at.y, size, WHITE);
 }
 
-fn draw_structure(s: &Structure, time: f32) {
+fn draw_structure(world: &World, s: &Structure, time: f32) {
     let r = s.rect();
-    match s.kind {
-        StructureKind::WoodWall => draw_block(r, WOOD_TOP, WOOD_FRONT, true),
-        StructureKind::WoodDoor if s.open => {
+    let material = s.kind.material().unwrap_or(Material::Wood);
+    let (top, front, line) = material_colors(material);
+    match s.kind.piece() {
+        Piece::Wall => draw_wall(r, material),
+        Piece::Door if s.open => {
             // Batentes nas laterais; folha da porta encostada à esquerda.
             for x in [r.x, r.right() - 5.0] {
-                draw_rectangle(x, r.y - WALL_H, 5.0, r.h + WALL_H, WOOD_FRONT);
+                draw_rectangle(x, r.y - WALL_H, 5.0, r.h + WALL_H, front);
             }
-            draw_rectangle(r.x + 5.0, r.y - WALL_H + 4.0, 4.0, r.h + WALL_H - 4.0, WOOD_TOP);
+            draw_rectangle(r.x + 5.0, r.y - WALL_H + 4.0, 4.0, r.h + WALL_H - 4.0, top);
         }
-        StructureKind::WoodDoor => {
-            draw_block(r, WOOD_TOP, Color::new(0.45, 0.30, 0.17, 1.0), false);
-            let front = r.bottom() - WALL_H;
-            draw_rectangle_lines(r.x + 6.0, front + 2.0, r.w - 12.0, WALL_H - 2.0, 1.5, WOOD_LINE);
-            draw_circle(
-                r.right() - 10.0,
-                front + WALL_H * 0.55,
-                1.6,
-                Color::new(0.85, 0.75, 0.4, 1.0),
+        Piece::Door => {
+            draw_wall(r, material);
+            let face = r.bottom() - WALL_H;
+            draw_rectangle(r.x + 6.0, face + 2.0, r.w - 12.0, WALL_H - 2.0, shade(front, 0.85));
+            draw_rectangle_lines(r.x + 6.0, face + 2.0, r.w - 12.0, WALL_H - 2.0, 1.5, line);
+            let knob = if material == Material::Wood {
+                Color::new(0.85, 0.75, 0.4, 1.0)
+            } else {
+                Color::new(0.9, 0.9, 0.95, 1.0)
+            };
+            draw_circle(r.right() - 10.0, face + WALL_H * 0.55, 1.6, knob);
+        }
+        Piece::Window => {
+            draw_wall(r, material);
+            // Vidro também no alto (numa fileira vertical, a face da frente fica escondida).
+            draw_rectangle(
+                r.x + 8.0,
+                r.y - WALL_H + 10.0,
+                r.w - 16.0,
+                6.0,
+                Color::new(0.55, 0.75, 0.9, 0.9),
             );
+            let face = r.bottom() - WALL_H;
+            let glass = Rect::new(r.x + 7.0, face + 4.0, r.w - 14.0, WALL_H - 10.0);
+            draw_rectangle(glass.x, glass.y, glass.w, glass.h, Color::new(0.55, 0.75, 0.9, 0.9));
+            draw_line(glass.x + 2.0, glass.y + 2.0, glass.x + 7.0, glass.y + 2.0, 1.5, WHITE);
+            draw_line(glass.center().x, glass.y, glass.center().x, glass.bottom(), 1.5, line);
+            draw_line(glass.x, glass.center().y, glass.right(), glass.center().y, 1.5, line);
+            draw_rectangle_lines(glass.x, glass.y, glass.w, glass.h, 2.0, line);
+            draw_rectangle(glass.x - 2.0, glass.bottom(), glass.w + 4.0, 2.5, top);
         }
+        Piece::Gate if s.open => {
+            for post in building::gate_posts(r, s.vertical) {
+                draw_post(post, material);
+            }
+            // Folhas abertas encostadas nos batentes.
+            let [a, b] = building::gate_posts(r, s.vertical);
+            if s.vertical {
+                draw_rectangle(a.x + 4.0, a.bottom() - WALL_H, r.w - 8.0, 4.0, top);
+                draw_rectangle(b.x + 4.0, b.y - WALL_H, r.w - 8.0, 4.0, top);
+            } else {
+                draw_rectangle(a.right(), r.y - WALL_H + 6.0, 4.0, r.h + WALL_H - 8.0, top);
+                draw_rectangle(b.x - 4.0, r.y - WALL_H + 6.0, 4.0, r.h + WALL_H - 8.0, top);
+            }
+        }
+        Piece::Gate => {
+            draw_wall(r, material);
+            let face = Rect::new(r.x, r.bottom() - WALL_H, r.w, WALL_H);
+            if !s.vertical {
+                // Travessas em X e batentes mais escuros nas pontas.
+                let mid = face.center().x;
+                for (x0, x1) in [(face.x + 6.0, mid - 3.0), (mid + 3.0, face.right() - 6.0)] {
+                    draw_line(x0, face.y + 3.0, x1, face.bottom() - 3.0, 2.0, line);
+                    draw_line(x0, face.bottom() - 3.0, x1, face.y + 3.0, 2.0, line);
+                }
+                draw_line(mid, face.y, mid, face.bottom(), 2.0, line);
+                for x in [face.x, face.right() - 5.0] {
+                    draw_rectangle(x, r.y - WALL_H, 5.0, r.h + WALL_H, shade(front, 0.8));
+                }
+            } else {
+                for y in [r.y - WALL_H, r.bottom() - WALL_H - 5.0] {
+                    draw_rectangle(r.x, y, r.w, 5.0, shade(top, 0.8));
+                }
+            }
+        }
+        Piece::Fence => draw_fence(world, s, material),
+        Piece::Foundation => draw_foundation(r, material),
+        Piece::Roof => {}
+        Piece::Station | Piece::Furniture => draw_furnishing(s, r, time),
+    }
+    draw_structure_health(s);
+}
+
+/// Estações (fogueira, forja, bancada, caixa) e móveis.
+fn draw_furnishing(s: &Structure, r: Rect, time: f32) {
+    let base = r.bottom() - 4.0;
+    match s.kind {
         StructureKind::StorageBox => {
             let (x, w) = (r.x + 5.0, r.w - 10.0);
-            let base = r.bottom() - 4.0;
             draw_ellipse(r.center().x, base, w / 2.0 + 2.0, 4.0, 0.0, SHADOW);
             draw_rectangle(x, base - 14.0, w, 14.0, WOOD_FRONT);
             draw_rectangle(x, base - 22.0, w, 8.0, WOOD_TOP);
@@ -638,23 +768,348 @@ fn draw_structure(s: &Structure, time: f32) {
                 draw_rectangle(sx, base - 22.0, 3.0, 22.0, WOOD_LINE);
             }
         }
-        StructureKind::Workbench => {
-            let base = r.bottom() - 4.0;
+        StructureKind::Workbench | StructureKind::Table => {
             draw_ellipse(r.center().x, base, r.w / 2.0, 4.0, 0.0, SHADOW);
             for lx in [r.x + 4.0, r.right() - 8.0] {
                 draw_rectangle(lx, base - 14.0, 4.0, 14.0, WOOD_LINE);
             }
             draw_rectangle(r.x + 1.0, base - 22.0, r.w - 2.0, 6.0, WOOD_TOP);
             draw_rectangle(r.x + 1.0, base - 16.0, r.w - 2.0, 3.0, WOOD_FRONT);
-            // Ferramentas em cima
-            let stone = Color::from_rgba(150, 150, 158, 255);
-            draw_line(r.x + 7.0, base - 24.0, r.x + 16.0, base - 27.0, 2.0, WOOD_LINE);
-            draw_rectangle(r.x + 14.0, base - 30.0, 5.0, 4.0, stone);
-            draw_circle(r.right() - 8.0, base - 25.0, 3.0, stone);
+            if s.kind == StructureKind::Workbench {
+                // Ferramentas em cima
+                let stone = Color::from_rgba(150, 150, 158, 255);
+                draw_line(r.x + 7.0, base - 24.0, r.x + 16.0, base - 27.0, 2.0, WOOD_LINE);
+                draw_rectangle(r.x + 14.0, base - 30.0, 5.0, 4.0, stone);
+                draw_circle(r.right() - 8.0, base - 25.0, 3.0, stone);
+            } else {
+                // Uma caneca e um prato.
+                draw_rectangle(r.x + 8.0, base - 28.0, 4.0, 6.0, Color::from_rgba(200, 200, 205, 255));
+                draw_ellipse(
+                    r.right() - 10.0,
+                    base - 22.0,
+                    5.0,
+                    2.0,
+                    0.0,
+                    Color::from_rgba(235, 230, 220, 255),
+                );
+            }
         }
+        StructureKind::Chair => {
+            let (cx, w) = (r.center().x, 14.0);
+            draw_ellipse(cx, base, 8.0, 3.0, 0.0, SHADOW);
+            for lx in [cx - w / 2.0, cx + w / 2.0 - 2.0] {
+                draw_rectangle(lx, base - 10.0, 2.0, 10.0, WOOD_LINE);
+            }
+            draw_rectangle(cx - w / 2.0, base - 22.0, w, 9.0, WOOD_FRONT);
+            draw_rectangle(cx - w / 2.0, base - 13.0, w, 4.0, WOOD_TOP);
+        }
+        StructureKind::Bed => {
+            draw_ellipse(r.center().x, base, r.w / 2.0, 4.0, 0.0, SHADOW);
+            draw_rectangle(r.x + 3.0, r.y - 2.0, r.w - 6.0, r.h - 2.0, WOOD_FRONT);
+            draw_rectangle(r.x + 3.0, r.y - 8.0, r.w - 6.0, 8.0, WOOD_LINE);
+            draw_rectangle(
+                r.x + 5.0,
+                r.y,
+                r.w - 10.0,
+                r.h - 8.0,
+                Color::from_rgba(236, 232, 222, 255),
+            );
+            draw_rectangle(r.x + 8.0, r.y + 2.0, r.w - 16.0, 6.0, WHITE);
+            draw_rectangle(
+                r.x + 5.0,
+                r.y + 11.0,
+                r.w - 10.0,
+                r.h - 19.0,
+                Color::from_rgba(170, 52, 52, 255),
+            );
+            draw_line(
+                r.x + 5.0,
+                r.y + 11.0,
+                r.right() - 5.0,
+                r.y + 11.0,
+                1.5,
+                Color::from_rgba(120, 30, 30, 255),
+            );
+            draw_rectangle(r.x + 3.0, base - 4.0, r.w - 6.0, 4.0, WOOD_LINE);
+        }
+        StructureKind::Torch => {
+            let c = vec2(r.center().x, base);
+            draw_ellipse(c.x, c.y, 5.0, 2.0, 0.0, SHADOW);
+            draw_line(c.x, c.y, c.x, c.y - 22.0, 3.0, WOOD_LINE);
+            draw_rectangle(c.x - 3.0, c.y - 25.0, 6.0, 4.0, Color::from_rgba(90, 70, 50, 255));
+            let flick = (time * 13.0 + r.x).sin() * 1.5;
+            draw_triangle(
+                vec2(c.x - 4.0, c.y - 25.0),
+                vec2(c.x + 4.0, c.y - 25.0),
+                vec2(c.x + flick * 0.5, c.y - 37.0 - flick),
+                Color::from_rgba(240, 120, 30, 255),
+            );
+            draw_triangle(
+                vec2(c.x - 2.0, c.y - 25.0),
+                vec2(c.x + 2.0, c.y - 25.0),
+                vec2(c.x - flick * 0.3, c.y - 31.0),
+                Color::from_rgba(255, 220, 100, 255),
+            );
+        }
+        StructureKind::FlowerPot => {
+            let c = vec2(r.center().x, base);
+            draw_ellipse(c.x, c.y, 8.0, 3.0, 0.0, SHADOW);
+            let clay = Color::from_rgba(184, 98, 60, 255);
+            draw_triangle(
+                vec2(c.x - 7.0, c.y - 12.0),
+                vec2(c.x + 7.0, c.y - 12.0),
+                vec2(c.x + 5.0, c.y),
+                clay,
+            );
+            draw_triangle(
+                vec2(c.x - 7.0, c.y - 12.0),
+                vec2(c.x + 5.0, c.y),
+                vec2(c.x - 5.0, c.y),
+                clay,
+            );
+            draw_rectangle(c.x - 8.0, c.y - 14.0, 16.0, 3.0, shade(clay, 1.15));
+            let leaf = Color::from_rgba(70, 140, 60, 255);
+            for (dx, dy) in [(-5.0, -18.0), (4.0, -19.0), (0.0, -23.0), (-2.0, -16.0)] {
+                draw_circle(c.x + dx, c.y + dy, 4.0, leaf);
+            }
+            for (dx, dy, col) in [
+                (-4.0, -22.0, Color::from_rgba(240, 90, 120, 255)),
+                (4.0, -24.0, Color::from_rgba(250, 210, 80, 255)),
+                (1.0, -27.0, Color::from_rgba(200, 120, 230, 255)),
+            ] {
+                draw_circle(c.x + dx, c.y + dy, 2.2, col);
+            }
+        }
+        StructureKind::Rug => draw_rug(r),
         StructureKind::Campfire => draw_campfire(r, s.is_lit(), time),
         StructureKind::Forge => draw_forge(r, s.is_lit(), time),
-        StructureKind::WoodFoundation => draw_foundation(r),
+        _ => {}
+    }
+}
+
+fn draw_rug(r: Rect) {
+    let inner = Rect::new(r.x + 3.0, r.y + 5.0, r.w - 6.0, r.h - 10.0);
+    draw_rectangle(inner.x, inner.y, inner.w, inner.h, Color::from_rgba(150, 48, 52, 255));
+    let gold = Color::from_rgba(220, 180, 90, 255);
+    draw_rectangle_lines(inner.x + 2.0, inner.y + 2.0, inner.w - 4.0, inner.h - 4.0, 1.5, gold);
+    let c = inner.center();
+    draw_triangle(vec2(c.x - 6.0, c.y), vec2(c.x, c.y - 5.0), vec2(c.x + 6.0, c.y), gold);
+    draw_triangle(vec2(c.x - 6.0, c.y), vec2(c.x, c.y + 5.0), vec2(c.x + 6.0, c.y), gold);
+    for x in [inner.x, inner.right()] {
+        for i in 0..4 {
+            let y = inner.y + 3.0 + i as f32 * (inner.h - 6.0) / 3.0;
+            draw_line(x, y, x + if x == inner.x { -2.0 } else { 2.0 }, y, 1.0, gold);
+        }
+    }
+}
+
+/// Cores (topo, frente, linhas) de cada material.
+fn material_colors(m: Material) -> (Color, Color, Color) {
+    match m {
+        Material::Wood => (WOOD_TOP, WOOD_FRONT, WOOD_LINE),
+        Material::Stone => (
+            Color::from_rgba(172, 168, 160, 255),
+            Color::from_rgba(128, 124, 118, 255),
+            Color::from_rgba(84, 80, 76, 255),
+        ),
+        Material::Metal => (
+            Color::from_rgba(160, 170, 182, 255),
+            Color::from_rgba(106, 116, 130, 255),
+            Color::from_rgba(60, 66, 78, 255),
+        ),
+    }
+}
+
+/// Textura da face da frente: tábuas, blocos de pedra ou chapas com rebites.
+fn draw_wall_face(face: Rect, m: Material, line: Color) {
+    match m {
+        Material::Wood => {
+            let n = (face.w / 8.0).round().max(1.0) as i32;
+            for i in 1..n {
+                let x = face.x + i as f32 * face.w / n as f32;
+                draw_line(x, face.y, x, face.bottom(), 1.0, line);
+            }
+        }
+        Material::Stone => {
+            let rows = 3;
+            let h = face.h / rows as f32;
+            for row in 0..rows {
+                let y = face.y + row as f32 * h;
+                if row > 0 {
+                    draw_line(face.x, y, face.right(), y, 1.0, line);
+                }
+                let offset = if row % 2 == 0 { 0.0 } else { 5.0 };
+                let mut x = face.x + offset + 10.0;
+                while x < face.right() - 1.0 {
+                    draw_line(x, y, x, y + h, 1.0, line);
+                    x += 10.0;
+                }
+            }
+        }
+        Material::Metal => {
+            let n = (face.w / 16.0).round().max(1.0) as i32;
+            for i in 0..n {
+                let x0 = face.x + i as f32 * face.w / n as f32;
+                if i > 0 {
+                    draw_line(x0, face.y, x0, face.bottom(), 1.5, line);
+                }
+                for (dx, dy) in [(3.0, 3.0), (face.w / n as f32 - 3.0, 3.0)] {
+                    draw_circle(x0 + dx, face.y + dy, 0.9, line);
+                    draw_circle(x0 + dx, face.bottom() - dy, 0.9, line);
+                }
+            }
+        }
+    }
+}
+
+/// Bloco de parede em 3/4: face de cima deslocada para cima + face frontal com a textura do material.
+fn draw_wall(r: Rect, m: Material) {
+    let (top, front, line) = material_colors(m);
+    draw_rectangle(r.x, r.y - WALL_H, r.w, r.h, top);
+    // Moldura interna na face de cima, para não confundir com o piso.
+    draw_rectangle_lines(r.x + 4.0, r.y - WALL_H + 4.0, r.w - 8.0, r.h - 8.0, 1.0, line);
+    let face = Rect::new(r.x, r.bottom() - WALL_H, r.w, WALL_H);
+    draw_rectangle(face.x, face.y, face.w, face.h, front);
+    draw_wall_face(face, m, line);
+    draw_line(r.x, face.y, r.right(), face.y, 1.5, line);
+    draw_rectangle_lines(r.x, r.y - WALL_H, r.w, r.h + WALL_H, 1.0, line);
+}
+
+/// Batente fino (portão aberto).
+fn draw_post(r: Rect, m: Material) {
+    let (top, front, line) = material_colors(m);
+    draw_rectangle(r.x, r.y - WALL_H, r.w, r.h, top);
+    draw_rectangle(r.x, r.bottom() - WALL_H, r.w, WALL_H, front);
+    draw_rectangle_lines(r.x, r.y - WALL_H, r.w, r.h + WALL_H, 1.0, line);
+}
+
+/// Cerca baixa: mourão no meio do tile e travessas até as cercas e paredes vizinhas.
+fn draw_fence(world: &World, s: &Structure, m: Material) {
+    let (top, front, line) = material_colors(m);
+    let c = s.rect().center() + vec2(0.0, 6.0);
+    let joins = |dx: i32, dy: i32| {
+        world
+            .structure_at((s.tile.0 + dx, s.tile.1 + dy), building::Layer::Object)
+            .is_some_and(|i| {
+                matches!(
+                    world.structures[i].kind.piece(),
+                    Piece::Fence | Piece::Wall | Piece::Door | Piece::Window | Piece::Gate
+                )
+            })
+    };
+    let (left, right, up, down) = (joins(-1, 0), joins(1, 0), joins(0, -1), joins(0, 1));
+    let half = TILE / 2.0;
+    let horizontal = left || right || !(up || down);
+    for h in [7.0, 14.0] {
+        if horizontal {
+            let x0 = if left || !(right || up || down) {
+                c.x - half
+            } else {
+                c.x
+            };
+            let x1 = if right || !(left || up || down) {
+                c.x + half
+            } else {
+                c.x
+            };
+            draw_line(x0, c.y - h, x1, c.y - h, 2.5, front);
+        }
+    }
+    if up {
+        draw_rectangle(c.x - 1.5, c.y - half - 14.0, 3.0, half, front);
+    }
+    if down {
+        draw_rectangle(c.x - 1.5, c.y - 14.0, 3.0, half, front);
+    }
+    draw_ellipse(c.x, c.y, 4.0, 1.5, 0.0, SHADOW);
+    draw_rectangle(c.x - 2.5, c.y - 19.0, 5.0, 19.0, top);
+    draw_rectangle_lines(c.x - 2.5, c.y - 19.0, 5.0, 19.0, 1.0, line);
+}
+
+/// Barra de vida sobre estruturas danificadas.
+fn draw_structure_health(s: &Structure) {
+    let frac = s.health_frac();
+    if frac >= 1.0 {
+        return;
+    }
+    let r = s.rect();
+    let y = if s.kind.flat() { r.y - 6.0 } else { r.y - WALL_H - 6.0 };
+    let w = (r.w - 8.0).min(48.0);
+    let x = r.center().x - w / 2.0;
+    draw_rectangle(x, y, w, 3.0, Color::new(0.0, 0.0, 0.0, 0.6));
+    let color = if frac < 0.3 {
+        Color::new(0.9, 0.3, 0.25, 1.0)
+    } else {
+        Color::new(0.95, 0.75, 0.3, 1.0)
+    };
+    draw_rectangle(x, y, w * frac, 3.0, color);
+}
+
+/// Tetos por cima de tudo. Os tiles de `hidden` (o cômodo onde o jogador está) ficam quase transparentes.
+pub fn draw_roofs(world: &World, view: Rect, hidden: &HashSet<(i32, i32)>) {
+    let roofs: HashSet<(i32, i32)> = world
+        .structures
+        .iter()
+        .filter(|s| s.kind.layer() == building::Layer::Roof)
+        .map(|s| s.tile)
+        .collect();
+    for s in world
+        .structures
+        .iter()
+        .filter(|s| s.kind.layer() == building::Layer::Roof && s.rect().overlaps(&view))
+    {
+        let alpha = if hidden.contains(&s.tile) { 0.15 } else { 1.0 };
+        let (top, line) = match s.kind.material().unwrap_or(Material::Wood) {
+            Material::Wood => (Color::from_rgba(186, 150, 86, 255), Color::from_rgba(128, 96, 50, 255)),
+            Material::Stone => (Color::from_rgba(112, 116, 128, 255), Color::from_rgba(72, 74, 86, 255)),
+            Material::Metal => (
+                Color::from_rgba(146, 158, 170, 255),
+                Color::from_rgba(90, 100, 114, 255),
+            ),
+        };
+        let (top, line) = (top.with_alpha(alpha), line.with_alpha(alpha));
+        let r = s.rect();
+        let y = r.y - WALL_H;
+        draw_rectangle(r.x, y, r.w, r.h, top);
+        match s.kind.material() {
+            Some(Material::Metal) => {
+                for i in 1..8 {
+                    let x = r.x + i as f32 * r.w / 8.0;
+                    draw_line(x, y, x, y + r.h, 1.0, line);
+                }
+            }
+            Some(Material::Stone) => {
+                for row in 0..4 {
+                    let ry = y + row as f32 * 8.0 + 8.0;
+                    draw_line(r.x, ry, r.right(), ry, 1.0, line);
+                    let offset = if row % 2 == 0 { 4.0 } else { 0.0 };
+                    for i in 0..4 {
+                        let x = r.x + offset + i as f32 * 8.0;
+                        draw_line(x, ry - 8.0, x, ry, 1.0, line);
+                    }
+                }
+            }
+            _ => {
+                for row in 1..4 {
+                    let ry = y + row as f32 * 8.0;
+                    draw_line(r.x, ry, r.right(), ry, 1.5, line);
+                }
+            }
+        }
+        // Bordas onde o teto acaba (e o beiral na frente).
+        let (x, t) = (s.tile.0, s.tile.1);
+        if !roofs.contains(&(x - 1, t)) {
+            draw_line(r.x, y, r.x, y + r.h, 2.0, line);
+        }
+        if !roofs.contains(&(x + 1, t)) {
+            draw_line(r.right(), y, r.right(), y + r.h, 2.0, line);
+        }
+        if !roofs.contains(&(x, t - 1)) {
+            draw_line(r.x, y, r.right(), y, 2.0, line);
+        }
+        if !roofs.contains(&(x, t + 1)) {
+            draw_rectangle(r.x, y + r.h, r.w, 4.0, line);
+        }
     }
 }
 
@@ -693,23 +1148,6 @@ fn draw_forge(r: Rect, lit: bool, time: f32) {
     draw_rectangle_lines(r.x + 2.0, r.y - WALL_H + 4.0, r.w - 4.0, r.h + WALL_H - 6.0, 1.0, line);
 }
 
-/// Bloco em 3/4: face de cima deslocada para cima + face frontal.
-fn draw_block(r: Rect, top: Color, front: Color, planks: bool) {
-    draw_rectangle(r.x, r.y - WALL_H, r.w, r.h, top);
-    // Moldura interna na face de cima, para não confundir com o piso.
-    draw_rectangle_lines(r.x + 4.0, r.y - WALL_H + 4.0, r.w - 8.0, r.h - 8.0, 1.0, WOOD_LINE);
-    let front_y = r.bottom() - WALL_H;
-    draw_rectangle(r.x, front_y, r.w, WALL_H, front);
-    if planks {
-        for i in 1..4 {
-            let x = r.x + i as f32 * r.w / 4.0;
-            draw_line(x, front_y, x, r.bottom(), 1.0, WOOD_LINE);
-        }
-    }
-    draw_line(r.x, front_y, r.right(), front_y, 1.5, WOOD_LINE);
-    draw_rectangle_lines(r.x, r.y - WALL_H, r.w, r.h + WALL_H, 1.0, WOOD_LINE);
-}
-
 fn draw_campfire(r: Rect, lit: bool, time: f32) {
     let c = vec2(r.center().x, r.bottom() - 10.0);
     let stone = Color::from_rgba(120, 118, 122, 255);
@@ -738,8 +1176,8 @@ fn draw_campfire(r: Rect, lit: bool, time: f32) {
 }
 
 /// Prévia translúcida da estrutura a posicionar, verde se válida e vermelha se não.
-pub fn draw_ghost(kind: StructureKind, tile: (i32, i32), valid: bool) {
-    let r = building::tile_rect(tile);
+pub fn draw_ghost(kind: StructureKind, tile: (i32, i32), vertical: bool, valid: bool) {
+    let r = building::footprint(kind, tile, vertical && kind.rotates());
     let color = if valid {
         Color::new(0.4, 1.0, 0.5, 0.35)
     } else {
@@ -747,7 +1185,11 @@ pub fn draw_ghost(kind: StructureKind, tile: (i32, i32), valid: bool) {
     };
     draw_rectangle(r.x, r.y, r.w, r.h, color);
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, color.with_alpha(0.9));
-    crate::ui::draw_item_icon(kind.item(), Rect::new(r.x + 4.0, r.y + 4.0, r.w - 8.0, r.h - 8.0));
+    let icon = building::tile_rect(tile);
+    crate::ui::draw_item_icon(
+        kind.item(),
+        Rect::new(icon.x + 4.0, icon.y + 4.0, icon.w - 8.0, icon.h - 8.0),
+    );
 }
 
 /// Escuridão noturna como malha com cor por vértice: gradientes suaves em volta das luzes.
@@ -911,17 +1353,16 @@ pub fn draw_names(avatars: &[Avatar], creatures: &[Creature], camera: &Camera2D)
             20.0,
             Color::new(0.0, 0.0, 0.0, 0.45),
         );
-        draw_text(name, at.x - w / 2.0, at.y, 18.0, WHITE);
+        let (text, bar) = if a.hostile {
+            (Color::new(1.0, 0.5, 0.45, 1.0), Color::new(0.9, 0.3, 0.25, 1.0))
+        } else {
+            (WHITE, Color::new(0.4, 0.85, 0.4, 1.0))
+        };
+        draw_text(name, at.x - w / 2.0, at.y, 18.0, text);
         if let Some(frac) = a.health {
             let bw = 40.0;
             draw_rectangle(at.x - bw / 2.0, at.y + 6.0, bw, 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
-            draw_rectangle(
-                at.x - bw / 2.0,
-                at.y + 6.0,
-                bw * frac,
-                4.0,
-                Color::new(0.4, 0.85, 0.4, 1.0),
-            );
+            draw_rectangle(at.x - bw / 2.0, at.y + 6.0, bw * frac, 4.0, bar);
         }
     }
 }

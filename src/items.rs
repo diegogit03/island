@@ -45,6 +45,29 @@ pub enum ItemId {
     WoodFoundation,
     WoodWall,
     WoodDoor,
+    StoneFoundation,
+    StoneWall,
+    StoneDoor,
+    MetalFoundation,
+    MetalWall,
+    MetalDoor,
+    WoodWindow,
+    StoneWindow,
+    MetalWindow,
+    WoodGate,
+    StoneGate,
+    MetalGate,
+    WoodRoof,
+    StoneRoof,
+    MetalRoof,
+    WoodFence,
+    Bed,
+    Torch,
+    Table,
+    Chair,
+    Rug,
+    FlowerPot,
+    Hammer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +86,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 39] = [
+    pub const ALL: [ItemId; 62] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -103,6 +126,29 @@ impl ItemId {
         ItemId::WoodFoundation,
         ItemId::WoodWall,
         ItemId::WoodDoor,
+        ItemId::StoneFoundation,
+        ItemId::StoneWall,
+        ItemId::StoneDoor,
+        ItemId::MetalFoundation,
+        ItemId::MetalWall,
+        ItemId::MetalDoor,
+        ItemId::WoodWindow,
+        ItemId::StoneWindow,
+        ItemId::MetalWindow,
+        ItemId::WoodGate,
+        ItemId::StoneGate,
+        ItemId::MetalGate,
+        ItemId::WoodRoof,
+        ItemId::StoneRoof,
+        ItemId::MetalRoof,
+        ItemId::WoodFence,
+        ItemId::Bed,
+        ItemId::Torch,
+        ItemId::Table,
+        ItemId::Chair,
+        ItemId::Rug,
+        ItemId::FlowerPot,
+        ItemId::Hammer,
     ];
 
     pub fn name(self) -> &'static str {
@@ -146,6 +192,29 @@ impl ItemId {
             ItemId::WoodFoundation => "Fundação de Madeira",
             ItemId::WoodWall => "Parede de Madeira",
             ItemId::WoodDoor => "Porta de Madeira",
+            ItemId::StoneFoundation => "Fundação de Pedra",
+            ItemId::StoneWall => "Parede de Pedra",
+            ItemId::StoneDoor => "Porta de Pedra",
+            ItemId::MetalFoundation => "Fundação de Metal",
+            ItemId::MetalWall => "Parede de Metal",
+            ItemId::MetalDoor => "Porta de Metal",
+            ItemId::WoodWindow => "Janela de Madeira",
+            ItemId::StoneWindow => "Janela de Pedra",
+            ItemId::MetalWindow => "Janela de Metal",
+            ItemId::WoodGate => "Portão de Madeira",
+            ItemId::StoneGate => "Portão de Pedra",
+            ItemId::MetalGate => "Portão de Metal",
+            ItemId::WoodRoof => "Teto de Madeira",
+            ItemId::StoneRoof => "Teto de Pedra",
+            ItemId::MetalRoof => "Teto de Metal",
+            ItemId::WoodFence => "Cerca de Madeira",
+            ItemId::Bed => "Cama",
+            ItemId::Torch => "Tocha",
+            ItemId::Table => "Mesa",
+            ItemId::Chair => "Cadeira",
+            ItemId::Rug => "Tapete",
+            ItemId::FlowerPot => "Vaso de Flores",
+            ItemId::Hammer => "Martelo",
         }
     }
 
@@ -176,6 +245,28 @@ impl ItemId {
             | ItemId::Raft => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
+            ItemId::StoneFoundation
+            | ItemId::StoneWall
+            | ItemId::StoneDoor
+            | ItemId::MetalFoundation
+            | ItemId::MetalWall
+            | ItemId::MetalDoor
+            | ItemId::WoodWindow
+            | ItemId::StoneWindow
+            | ItemId::MetalWindow
+            | ItemId::WoodRoof
+            | ItemId::StoneRoof
+            | ItemId::MetalRoof
+            | ItemId::WoodFence
+            | ItemId::Torch => 20,
+            ItemId::WoodGate
+            | ItemId::StoneGate
+            | ItemId::MetalGate
+            | ItemId::Bed
+            | ItemId::Table
+            | ItemId::Chair
+            | ItemId::Rug
+            | ItemId::FlowerPot => 5,
             ItemId::StonePickaxe
             | ItemId::StoneHatchet
             | ItemId::WoodenSpear
@@ -183,7 +274,8 @@ impl ItemId {
             | ItemId::MetalHatchet
             | ItemId::MetalSword
             | ItemId::WoodenClub
-            | ItemId::Slingshot => 1,
+            | ItemId::Slingshot
+            | ItemId::Hammer => 1,
         }
     }
 
@@ -216,7 +308,39 @@ impl ItemId {
             ItemId::StorageBox => 8.0,
             ItemId::Workbench => 12.0,
             ItemId::Forge => 25.0,
+            ItemId::StoneFoundation | ItemId::MetalWall | ItemId::MetalDoor | ItemId::MetalWindow => 8.0,
+            ItemId::StoneWall | ItemId::StoneDoor | ItemId::StoneWindow | ItemId::Bed | ItemId::Table => 6.0,
+            ItemId::MetalFoundation => 10.0,
+            ItemId::WoodWindow | ItemId::Chair | ItemId::FlowerPot => 3.0,
+            ItemId::WoodGate => 9.0,
+            ItemId::StoneGate => 18.0,
+            ItemId::MetalGate => 24.0,
+            ItemId::WoodRoof => 2.0,
+            ItemId::StoneRoof => 4.0,
+            ItemId::MetalRoof => 5.0,
+            ItemId::WoodFence => 1.5,
+            ItemId::Torch => 0.5,
+            ItemId::Rug => 1.0,
+            ItemId::Hammer => 1.5,
         }
+    }
+
+    pub fn is_saddle(self) -> bool {
+        matches!(
+            self,
+            ItemId::RaptorSaddle
+                | ItemId::PteranodonSaddle
+                | ItemId::ArgentavisSaddle
+                | ItemId::MammothSaddle
+                | ItemId::SmilodonSaddle
+                | ItemId::BeelzebufoSaddle
+                | ItemId::SarcosuchusSaddle
+                | ItemId::MegalodonSaddle
+                | ItemId::IchthyosaurSaddle
+                | ItemId::MosasaurSaddle
+                | ItemId::KrakenSaddle
+                | ItemId::KangarooSaddle
+        )
     }
 
     pub fn tool(self) -> Option<ToolKind> {
@@ -246,6 +370,28 @@ impl ItemId {
             ItemId::WoodFoundation => Some(StructureKind::WoodFoundation),
             ItemId::WoodWall => Some(StructureKind::WoodWall),
             ItemId::WoodDoor => Some(StructureKind::WoodDoor),
+            ItemId::StoneFoundation => Some(StructureKind::StoneFoundation),
+            ItemId::StoneWall => Some(StructureKind::StoneWall),
+            ItemId::StoneDoor => Some(StructureKind::StoneDoor),
+            ItemId::MetalFoundation => Some(StructureKind::MetalFoundation),
+            ItemId::MetalWall => Some(StructureKind::MetalWall),
+            ItemId::MetalDoor => Some(StructureKind::MetalDoor),
+            ItemId::WoodWindow => Some(StructureKind::WoodWindow),
+            ItemId::StoneWindow => Some(StructureKind::StoneWindow),
+            ItemId::MetalWindow => Some(StructureKind::MetalWindow),
+            ItemId::WoodGate => Some(StructureKind::WoodGate),
+            ItemId::StoneGate => Some(StructureKind::StoneGate),
+            ItemId::MetalGate => Some(StructureKind::MetalGate),
+            ItemId::WoodRoof => Some(StructureKind::WoodRoof),
+            ItemId::StoneRoof => Some(StructureKind::StoneRoof),
+            ItemId::MetalRoof => Some(StructureKind::MetalRoof),
+            ItemId::WoodFence => Some(StructureKind::WoodFence),
+            ItemId::Bed => Some(StructureKind::Bed),
+            ItemId::Torch => Some(StructureKind::Torch),
+            ItemId::Table => Some(StructureKind::Table),
+            ItemId::Chair => Some(StructureKind::Chair),
+            ItemId::Rug => Some(StructureKind::Rug),
+            ItemId::FlowerPot => Some(StructureKind::FlowerPot),
             _ => None,
         }
     }
@@ -259,6 +405,7 @@ impl ItemId {
             ItemId::MetalSword => Some(200),
             ItemId::WoodenClub => Some(60),
             ItemId::Slingshot => Some(80),
+            ItemId::Hammer => Some(150),
             _ => None,
         }
     }
@@ -283,6 +430,7 @@ impl ItemId {
             Some(ItemId::MetalPickaxe) => 15.0,
             Some(ItemId::StoneHatchet) => 12.0,
             Some(ItemId::StonePickaxe) => 10.0,
+            Some(ItemId::Hammer) => 8.0,
             Some(ItemId::WoodenClub) => 3.0,
             _ => 6.0,
         }

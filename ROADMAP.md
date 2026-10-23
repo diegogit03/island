@@ -103,11 +103,19 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Multiplayer: a tribo é de quem recrutou (só o dono abre o painel e dá ordens); faixa na cabeça na cor do dono
 - Ainda não: NPCs hostis, fome dos membros, tribos entre jogadores (v1.0)
 
-## v0.10 — Construções
-- Tiers de pedra e metal (fundações, paredes, portas), teto e andares
-- Portões grandes (para dinos), janelas e cercas
-- Cama como ponto de respawn, móveis e decoração
-- Vida das estruturas e reparo; criaturas e NPCs hostis atacam bases
+## ✅ v0.10 — Construções
+- Tiers de pedra e metal: fundação, parede, porta, janela, portão e teto (pedra aguenta ~3× a madeira; metal, ~8×, e ainda sente menos dano)
+- Portão grande de 3 tiles (T gira antes de posicionar): aberto, passa até mamute; fechado, segura tudo
+- Janelas e cercas bloqueiam a passagem, mas as pedras do estilingue passam por elas
+- Teto: precisa de parede ou fundação perto; fica transparente no cômodo onde você está; voadores selvagens não alcançam quem está debaixo dele
+- Cama: ponto de renascer (na tela de morte, "Renascer na cama" leva para a sua cama mais perto); F numa cama a torna sua
+- Móveis e decoração: mesa, cadeira, tapete, vaso de flores e tocha (sempre acesa, ilumina a noite)
+- Abas no crafting (Itens, Construção, Selas)
+- Vida das estruturas (barra quando danificada) e martelo: cada martelada repara 1/4 gastando 1/4 dos materiais; desmontar algo com menos de metade da vida não devolve o item
+- Criaturas que perseguem alguém mordem a parede, porta ou cerca no caminho
+- **Saqueadores** (NPCs hostis): à noite, grupos de 2 a 5 aparecem perto da base de quem está jogando, quebram o caminho e atacam jogadores, membros e domesticados; a tribo e os dinos defendem; deixam o que carregavam e vão embora ao amanhecer
+- Estrutura destruída deixa o conteúdo numa bolsa
+- Ainda não: andares (pede níveis de altura no mundo 2D), saqueadores no save, ataques a bases sem ninguém por perto
 
 ## v0.11 — Industrialização
 - Cadeias de produção: moedor, curtume, fornalha industrial, refino de combustível

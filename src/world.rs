@@ -506,18 +506,63 @@ impl World {
             .iter()
             .flat_map(|c| &c.tents)
             .any(|t| t.distance_squared(pos) < (TENT_RADIUS + radius).powi(2));
+        node_hit || tent_hit || self.structure_hit(pos, radius).is_some()
+    }
+
+    /// Estrutura que um círculo em `pos` atravessaria (portões compridos contam pela borda).
+    pub fn structure_hit(&self, pos: Vec2, radius: f32) -> Option<usize> {
+        self.structures
+            .iter()
+            .position(|s| s.rect().center().distance(pos) < radius + TILE * 2.0 && s.blocks(pos, radius))
+    }
+
+    /// Uma pedra do estilingue bate em algo aqui? (passa por cima da água, de janelas e de cercas.)
+    pub fn stops_shot(&self, pos: Vec2) -> bool {
+        let node_hit = self.nodes.iter().any(|n| {
+            let r = n.kind.collision_radius();
+            r > 0.0 && n.is_alive() && n.pos.distance_squared(pos) < (r + 1.0).powi(2)
+        });
+        let tent_hit = self
+            .camps
+            .iter()
+            .flat_map(|c| &c.tents)
+            .any(|t| t.distance_squared(pos) < (TENT_RADIUS + 1.0).powi(2));
         node_hit
             || tent_hit
             || self
                 .structures
                 .iter()
-                .any(|s| s.rect().center().distance(pos) < TILE * 1.5 && s.blocks(pos, radius))
+                .any(|s| s.rect().center().distance(pos) < TILE * 2.0 && s.blocks_shot(pos, 1.0))
+    }
+
+    /// Estrutura logo à frente de quem anda de `pos` na direção `dir` (para criaturas e saqueadores
+    /// derrubarem o que está no caminho).
+    pub fn structure_in_way(&self, pos: Vec2, dir: Vec2, radius: f32) -> Option<usize> {
+        let dir = dir.normalize_or_zero();
+        if dir == Vec2::ZERO {
+            return None;
+        }
+        self.structure_hit(pos + dir * (radius + 6.0), 4.0)
     }
 
     pub fn structure_at(&self, tile: (i32, i32), layer: Layer) -> Option<usize> {
         self.structures
             .iter()
-            .position(|s| s.tile == tile && s.kind.layer() == layer)
+            .position(|s| s.kind.layer() == layer && s.covers(tile))
+    }
+
+    /// Debaixo de um teto (voadores selvagens não alcançam).
+    pub fn sheltered(&self, pos: Vec2) -> bool {
+        self.structure_at(building::tile_of(pos), Layer::Roof).is_some()
+    }
+
+    /// Tem fundação ou parede perto o bastante para segurar um teto no `tile`?
+    fn roof_supported(&self, tile: (i32, i32)) -> bool {
+        let center = building::tile_rect(tile).center();
+        let reach = building::ROOF_SUPPORT as f32 * TILE;
+        self.structures
+            .iter()
+            .any(|s| s.kind.supports_roof() && building::distance_to_rect(center, s.rect()) <= reach)
     }
 
     /// Pode posicionar `kind` no `tile`, com o jogador (círculo) em `player_pos`?
@@ -528,22 +573,42 @@ impl World {
         player_pos: Vec2,
         player_radius: f32,
     ) -> Result<(), PlaceError> {
-        let rect = building::tile_rect(tile);
+        self.can_place_oriented(kind, tile, false, player_pos, player_radius)
+    }
+
+    /// Como `can_place`, para peças compridas (portão) na vertical ou na horizontal.
+    pub fn can_place_oriented(
+        &self,
+        kind: StructureKind,
+        tile: (i32, i32),
+        vertical: bool,
+        player_pos: Vec2,
+        player_radius: f32,
+    ) -> Result<(), PlaceError> {
+        let vertical = vertical && kind.rotates();
+        let rect = building::footprint(kind, tile, vertical);
         if rect.center().distance(player_pos) > building::PLACE_REACH {
             return Err(PlaceError::TooFar);
         }
-        if !self.tile(tile.0, tile.1).is_land() {
+        let tiles = building::footprint_tiles(kind, tile, vertical);
+        if tiles.iter().any(|t| !self.tile(t.0, t.1).is_land()) {
             return Err(PlaceError::NotLand);
         }
-        if self.structure_at(tile, kind.layer()).is_some() {
+        if tiles.iter().any(|&t| self.structure_at(t, kind.layer()).is_some()) {
             return Err(PlaceError::Occupied);
+        }
+        if kind.layer() == Layer::Roof && !self.roof_supported(tile) {
+            return Err(PlaceError::NoSupport);
         }
         // Árvores, rochas e afins (mesmo esgotados, pois vão renascer) ocupam o tile.
         let node_inside = self.nodes.iter().any(|n| {
             let r = n.kind.collision_radius().max(6.0);
             building::distance_to_rect(n.pos, rect) < r
         });
-        let candidate = Structure::new(kind, tile);
+        let candidate = Structure {
+            vertical,
+            ..Structure::new(kind, tile)
+        };
         let in_camp = self
             .camps
             .iter()
@@ -556,6 +621,10 @@ impl World {
 
     pub fn place(&mut self, kind: StructureKind, tile: (i32, i32)) {
         self.structures.push(Structure::new(kind, tile));
+    }
+
+    pub fn place_structure(&mut self, s: Structure) {
+        self.structures.push(s);
     }
 
     /// Alguma estação do tipo `kind` dentro do alcance de `pos`?
@@ -738,5 +807,25 @@ mod tests {
             world.can_place(wall, water, building::tile_rect(water).center(), 7.0),
             Err(PlaceError::NotLand)
         );
+
+        // Teto só com apoio; portão ocupa 3 tiles.
+        let roof = StructureKind::WoodRoof;
+        assert_eq!(world.can_place(roof, (here.0 + 2, here.1), player, 7.0), Ok(()));
+        let far = (here.0, here.1 - 3);
+        let near = building::tile_rect(far).center() + vec2(0.0, 40.0);
+        assert_eq!(world.can_place(roof, far, near, 7.0), Err(PlaceError::NoSupport));
+        let gate = StructureKind::WoodGate;
+        assert_eq!(
+            world.can_place(gate, (here.0 + 2, here.1), player, 7.0),
+            Err(PlaceError::Occupied),
+            "a ponta esquerda cairia em cima da parede"
+        );
+        world.place_structure(Structure {
+            vertical: true,
+            ..Structure::new(gate, (here.0 + 2, here.1 - 2))
+        });
+        assert!(world.structure_at((here.0 + 2, here.1 - 1), Layer::Object).is_some());
+        assert!(world.structure_at((here.0 + 2, here.1 - 3), Layer::Object).is_some());
+        assert!(world.structure_at((here.0 + 3, here.1 - 2), Layer::Object).is_none());
     }
 }

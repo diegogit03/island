@@ -210,7 +210,8 @@ fn start_session(choice: Choice, name: &str) -> Result<(Connection, Option<Serve
 /// pteranodonte com um argentavis), _CARGO (painel de carga do argentavis), _ICE (bioma de gelo,
 /// montado num mamute), _SWAMP (pântano, montado num sarcosuchus entre piranhas), _SEA (jangada no mar
 /// com fauna marinha), _SEA_RIDE (montado num mosassauro), _DESERT (montado num canguru no deserto),
-/// _TRIBE (acampamento com membros da tribo), _RECRUIT (recrutar um morador) e _MEMBER (painel de ordens).
+/// _TRIBE (acampamento com membros da tribo), _RECRUIT (recrutar um morador), _MEMBER (painel de ordens),
+/// _FORTRESS (base de pedra com portão, teto e móveis) e _RAID (saqueadores atacando a cabana à noite).
 /// Com ISLAND_SHOT_JOIN=ip:porta, entra num servidor já rodando em vez de subir um local;
 /// ISLAND_SHOT_MENU mostra o menu principal.
 async fn screenshot(path: &str) {
@@ -271,6 +272,12 @@ async fn screenshot(path: &str) {
         if env("ISLAND_SHOT_MEMBER").is_some() {
             sim.demo_member();
         }
+        if env("ISLAND_SHOT_FORTRESS").is_some() {
+            sim.demo_fortress();
+        }
+        if env("ISLAND_SHOT_RAID").is_some() {
+            sim.demo_raid();
+        }
         if env("ISLAND_SHOT_DESERT").is_some() {
             sim.demo_desert();
         }
@@ -313,6 +320,10 @@ async fn screenshot(path: &str) {
     let mut client = Client::new(connection);
     if env("ISLAND_SHOT_INVENTORY").is_some() {
         client.ui.inventory_open = true;
+    }
+    // Na base de pedra, o crafting abre na aba de construção.
+    if env("ISLAND_SHOT_FORTRESS").is_some() {
+        client.ui.craft_tab = crate::crafting::Category::Building;
     }
     for _ in 0..600 {
         client.update(1.0 / 60.0);

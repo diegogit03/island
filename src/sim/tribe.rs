@@ -1,11 +1,12 @@
 //! Tribo: moradores dos acampamentos, membros recrutados (seguir, ficar, coletar e guardar no baú,
-//! defender, atacar), apitos para a tribo toda e domesticados que lutam junto com o dono.
+//! defender, atacar), apitos para a tribo toda e domesticados que lutam junto com o dono
+//! (contra criaturas selvagens e saqueadores).
 
 use macroquad::math::{Vec2, vec2};
 
 use super::Sim;
 use crate::building::{self, StructureKind};
-use crate::creatures::{Command as Pet, Creature, Hit, State, Temperament};
+use crate::creatures::{Command as Pet, Creature, Foe, Hit, State, Temperament};
 use crate::gathering;
 use crate::items::ItemId;
 use crate::npc::{self, GatherKind, Npc, Order};
@@ -34,23 +35,34 @@ const STUCK_SECS: f32 = 1.5;
 /// Nome usado na lista de alvos da IA das criaturas (nunca coincide com o de um jogador).
 pub(super) const NPC_AI_NAME: &str = "\u{1}npc";
 
-/// Criatura selvagem perigosa mais perto de `center` (`hunters`: só quem está caçando alguém).
-fn nearest_threat(creatures: &[Creature], center: Vec2, radius: f32, hunters: bool) -> Option<u32> {
+/// Ameaça mais perto de `center`: criatura selvagem perigosa (`hunters`: só quem está caçando alguém)
+/// ou saqueador (`raiders`: `id` e posição; sempre contam).
+fn nearest_threat(
+    creatures: &[Creature],
+    raiders: &[(u32, Vec2)],
+    center: Vec2,
+    radius: f32,
+    hunters: bool,
+) -> Option<Foe> {
     creatures
         .iter()
         .filter(|c| c.is_wild() && c.is_conscious() && !c.buried && !c.flying)
         .filter(|c| c.state == State::Chase || (!hunters && c.species.temperament() == Temperament::Aggressive))
-        .map(|c| (c.id, c.pos.distance(center)))
+        .map(|c| (Foe::Creature(c.id), c.pos.distance(center)))
+        .chain(raiders.iter().map(|&(id, pos)| (Foe::Npc(id), pos.distance(center))))
         .filter(|&(_, d)| d <= radius)
         .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(id, _)| id)
+        .map(|(foe, _)| foe)
 }
 
-/// Dá para continuar batendo nesta criatura? (desmaiada não: ela pode estar sendo domesticada.)
-fn fair_target(creatures: &[Creature], id: u32) -> bool {
-    creatures
-        .iter()
-        .any(|c| c.id == id && c.is_wild() && c.is_conscious() && !c.buried && !c.flying)
+/// Dá para continuar batendo neste alvo? (criatura desmaiada não: ela pode estar sendo domesticada.)
+fn fair_target(creatures: &[Creature], npcs: &[Npc], foe: Foe) -> bool {
+    match foe {
+        Foe::Creature(id) => creatures
+            .iter()
+            .any(|c| c.id == id && c.is_wild() && c.is_conscious() && !c.buried && !c.flying),
+        Foe::Npc(id) => npcs.iter().any(|n| n.id == id && n.hostile && n.is_alive()),
+    }
 }
 
 /// Anda em direção a `to`. Conta o tempo preso (andando sem sair do lugar).
@@ -81,11 +93,45 @@ impl Sim {
         self.players.iter().position(|p| p.name == owner)
     }
 
+    /// Posição e raio de um alvo de luta.
+    pub(super) fn foe_body(&self, foe: Foe) -> Option<(Vec2, f32)> {
+        match foe {
+            Foe::Creature(id) => self.creature(id).map(|c| (c.pos, c.species.radius())),
+            Foe::Npc(id) => self
+                .npcs
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| (n.pos(), super::NPC_HIT_RADIUS)),
+        }
+    }
+
+    /// Golpe (ou mordida) de alguém da tribo de `by` num alvo. Retorna true se a luta acabou
+    /// (morreu ou desmaiou).
+    pub(super) fn strike(&mut self, foe: Foe, damage: f32, torpor: f32, from: Vec2, by: Option<usize>) -> bool {
+        match foe {
+            Foe::Creature(id) => {
+                let Some(ci) = self.creatures.iter().position(|c| c.id == id) else {
+                    return true;
+                };
+                let hit = self.creatures[ci].take_hit(damage, torpor, from);
+                self.report_hit(by, ci, damage, hit);
+                hit != Hit::Hurt
+            }
+            Foe::Npc(id) => {
+                if let Some(pos) = self.npcs.iter().find(|n| n.id == id).map(|n| n.pos()) {
+                    self.popup_styled(pos - vec2(0.0, 36.0), format!("-{damage:.0}"), PopupStyle::Damage);
+                }
+                self.hurt_npc(id, damage, by);
+                !self.npcs.iter().any(|n| n.id == id && n.is_alive())
+            }
+        }
+    }
+
     /// Repõe os moradores de cada acampamento até `CAMP_POPULATION`.
     pub(super) fn populate_camps(&mut self) {
         for ci in 0..self.world.camps.len() {
             let center = self.world.camps[ci].center;
-            let living = self.npcs.iter().filter(|n| n.owner.is_none() && n.camp == ci).count();
+            let living = self.npcs.iter().filter(|n| n.is_villager() && n.camp == ci).count();
             for _ in living..npc::CAMP_POPULATION {
                 let spot = (0..12)
                     .map(|_| center + vec2(self.rng.range(-60.0, 60.0), self.rng.range(-20.0, 40.0)))
@@ -101,11 +147,16 @@ impl Sim {
     pub(super) fn update_npcs(&mut self, dt: f32) {
         for ni in 0..self.npcs.len() {
             let npc = &mut self.npcs[ni];
+            if !npc.is_alive() {
+                continue;
+            }
             npc.calm += dt;
-            if npc.calm > 6.0 {
+            if npc.calm > 6.0 && !npc.hostile {
                 npc.health = (npc.health + REGEN * dt).min(npc::MAX_HEALTH);
             }
-            if npc.owner.is_some() {
+            if npc.hostile {
+                self.think_raider(ni, dt);
+            } else if npc.is_member() {
                 self.think_member(ni, dt);
             } else {
                 self.think_villager(ni, dt);
@@ -144,22 +195,27 @@ impl Sim {
             .map(|p| p.player.pos);
 
         // Luta primeiro: alvo dado pelo apito ou ameaça por perto (conforme a ordem).
-        if let Some(id) = self.npcs[ni].target
-            && !fair_target(&self.creatures, id)
+        if let Some(foe) = self.npcs[ni].target
+            && !fair_target(&self.creatures, &self.npcs, foe)
         {
             self.npcs[ni].target = None;
         }
         if self.npcs[ni].target.is_none() {
+            let raiders = self.raider_spots();
             let npc = &self.npcs[ni];
             let threat = match npc.order {
-                Order::Follow => owner_pos.and_then(|o| nearest_threat(&self.creatures, o, ESCORT_RADIUS, true)),
-                Order::Defend { post } => nearest_threat(&self.creatures, Vec2::from(post), DEFEND_RADIUS, false),
-                _ => nearest_threat(&self.creatures, npc.pos(), 90.0, true),
+                Order::Follow => {
+                    owner_pos.and_then(|o| nearest_threat(&self.creatures, &raiders, o, ESCORT_RADIUS, true))
+                }
+                Order::Defend { post } => {
+                    nearest_threat(&self.creatures, &raiders, Vec2::from(post), DEFEND_RADIUS, false)
+                }
+                _ => nearest_threat(&self.creatures, &raiders, npc.pos(), 90.0, true),
             };
             self.npcs[ni].target = threat;
         }
-        if let Some(id) = self.npcs[ni].target {
-            self.npc_fight(ni, id, dt);
+        if let Some(foe) = self.npcs[ni].target {
+            self.npc_fight(ni, foe, dt);
             return;
         }
 
@@ -199,13 +255,12 @@ impl Sim {
         }
     }
 
-    /// Persegue e golpeia a criatura `id` com a melhor arma que tiver.
-    fn npc_fight(&mut self, ni: usize, id: u32, dt: f32) {
-        let Some(ci) = self.creatures.iter().position(|c| c.id == id) else {
+    /// Persegue e golpeia o alvo com a melhor arma que tiver.
+    fn npc_fight(&mut self, ni: usize, foe: Foe, dt: f32) {
+        let Some((cpos, radius)) = self.foe_body(foe) else {
             self.npcs[ni].target = None;
             return;
         };
-        let (cpos, radius) = (self.creatures[ci].pos, self.creatures[ci].species.radius());
         let npc = &mut self.npcs[ni];
         let weapon = npc.best_weapon();
         npc.held = weapon;
@@ -231,10 +286,8 @@ impl Sim {
         }
         let damage = ItemId::melee_damage(weapon);
         let torpor = ItemId::melee_torpor(weapon);
-        let hit = self.creatures[ci].take_hit(damage, torpor, from);
         let owner = self.owner_index(self.npcs[ni].owner.as_deref());
-        self.report_hit(owner, ci, damage, hit);
-        if hit != Hit::Hurt {
+        if self.strike(foe, damage, torpor, from, owner) {
             self.npcs[ni].target = None;
         }
     }
@@ -359,17 +412,44 @@ impl Sim {
         }
     }
 
-    /// Mordida (ou golpe) de uma criatura selvagem num membro da tribo.
-    pub(super) fn hurt_npc(&mut self, id: u32, damage: f32) {
+    /// Dano num NPC (mordida, golpe de saqueador ou, num saqueador, de quem defende a base).
+    /// `by`: jogador que bateu (ou dono de quem bateu). Quem morre sai no fim do tick (`reap_npcs`).
+    pub(super) fn hurt_npc(&mut self, id: u32, damage: f32, by: Option<usize>) {
         let Some(ni) = self.npc_index(id) else { return };
         let npc = &mut self.npcs[ni];
+        if !npc.is_alive() {
+            return;
+        }
         npc.health -= damage;
         npc.calm = 0.0;
-        let pos = npc.body.pos;
-        self.popup_styled(pos - vec2(0.0, 36.0), format!("-{damage:.0}"), PopupStyle::Hurt);
-        if self.npcs[ni].health <= 0.0 {
+        if by.is_some() {
+            npc.last_hit = by;
+        }
+        let (pos, hostile) = (npc.body.pos, npc.hostile);
+        if !hostile {
+            self.popup_styled(pos - vec2(0.0, 36.0), format!("-{damage:.0}"), PopupStyle::Hurt);
+        }
+    }
+
+    /// Tira do mundo os NPCs mortos: membro deixa a bolsa com o inventário; saqueador deixa o que
+    /// carregava e dá XP para quem o abateu.
+    pub(super) fn reap_npcs(&mut self) {
+        let mut ni = 0;
+        while ni < self.npcs.len() {
+            if self.npcs[ni].is_alive() {
+                ni += 1;
+                continue;
+            }
             let mut npc = self.npcs.remove(ni);
             let stacks = npc.inventory.drain_all();
+            if npc.hostile {
+                self.world.drop_bag(npc.body.pos, stacks, BagKind::Dropped);
+                if let Some(pi) = npc.last_hit.filter(|&pi| pi < self.players.len()) {
+                    self.gain_xp(pi, super::raid::XP_RAIDER);
+                    self.notify(pi, "Saqueador abatido");
+                }
+                continue;
+            }
             self.world.drop_bag(npc.body.pos, stacks, BagKind::Death);
             if let Some(pi) = self.owner_index(npc.owner.as_deref()) {
                 self.notify(pi, format!("{} morreu", npc.name));
@@ -381,6 +461,9 @@ impl Sim {
     pub(super) fn talk_to(&mut self, pi: usize, id: u32) {
         let Some(ni) = self.npc_index(id) else { return };
         let npc = &self.npcs[ni];
+        if npc.hostile {
+            return;
+        }
         if let Some(owner) = npc.owner.as_ref().filter(|o| **o != self.players[pi].name) {
             let text = format!("{} é da tribo de {owner}", npc.name);
             self.notify(pi, text);
@@ -457,15 +540,20 @@ impl Sim {
                     .creatures
                     .iter()
                     .filter(|c| c.is_wild() && c.is_conscious() && !c.buried && !c.flying)
-                    .map(|c| (c.id, c.pos.distance(at) - c.species.radius()))
+                    .map(|c| (Foe::Creature(c.id), c.pos.distance(at) - c.species.radius()))
+                    .chain(
+                        self.raider_spots()
+                            .into_iter()
+                            .map(|(id, p)| (Foe::Npc(id), p.distance(at) - super::NPC_HIT_RADIUS)),
+                    )
                     .filter(|&(_, d)| d <= 60.0)
                     .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(id, _)| id);
-                let Some(id) = found else {
-                    self.notify(pi, "Aponte o mouse para uma criatura selvagem");
+                    .map(|(foe, _)| foe);
+                let Some(foe) = found else {
+                    self.notify(pi, "Aponte o mouse para uma criatura selvagem ou um saqueador");
                     return;
                 };
-                Some(id)
+                Some(foe)
             }
             _ => None,
         };
@@ -517,6 +605,7 @@ impl Sim {
 
     /// Domesticados que mordem lutam: atacam o alvo do apito, defendem o dono (seguindo) ou o posto.
     pub(super) fn update_tamed_combat(&mut self, dt: f32) {
+        let raiders = self.raider_spots();
         for ci in 0..self.creatures.len() {
             let c = &self.creatures[ci];
             let Some((_, _, range, _)) = c.species.attack() else {
@@ -525,8 +614,8 @@ impl Sim {
             if !c.is_tamed() || !c.is_conscious() || c.mounted || c.flying {
                 continue;
             }
-            if let Some(id) = c.attack_target
-                && !fair_target(&self.creatures, id)
+            if let Some(foe) = c.attack_target
+                && !fair_target(&self.creatures, &self.npcs, foe)
             {
                 self.creatures[ci].attack_target = None;
             }
@@ -540,18 +629,15 @@ impl Sim {
             if c.attack_target.is_none() {
                 let threat = match c.command {
                     Some(Pet::Follow) => {
-                        owner_pos.and_then(|o| nearest_threat(&self.creatures, o, ESCORT_RADIUS, true))
+                        owner_pos.and_then(|o| nearest_threat(&self.creatures, &raiders, o, ESCORT_RADIUS, true))
                     }
-                    Some(Pet::Defend) => nearest_threat(&self.creatures, home, DEFEND_RADIUS, false),
+                    Some(Pet::Defend) => nearest_threat(&self.creatures, &raiders, home, DEFEND_RADIUS, false),
                     _ => None,
                 };
                 self.creatures[ci].attack_target = threat;
             }
             let c = &self.creatures[ci];
-            let Some(ti) = c
-                .attack_target
-                .and_then(|id| self.creatures.iter().position(|t| t.id == id))
-            else {
+            let Some((foe, (tpos, tradius))) = c.attack_target.and_then(|f| self.foe_body(f).map(|b| (f, b))) else {
                 // Defendendo e sem inimigo: volta para o posto.
                 if c.command == Some(Pet::Defend) && c.pos.distance(home) > 40.0 {
                     let (dir, speed) = (home - c.pos, c.species.speeds().0.max(90.0));
@@ -559,7 +645,6 @@ impl Sim {
                 }
                 continue;
             };
-            let (tpos, tradius) = (self.creatures[ti].pos, self.creatures[ti].species.radius());
             let (pos, radius) = (c.pos, c.species.radius());
             if tpos.distance(pos) - tradius - radius > range {
                 let speed = c.species.speeds().1.max(150.0);
@@ -571,10 +656,8 @@ impl Sim {
             }
             self.creatures[ci].facing_left = tpos.x < pos.x;
             let damage = self.creatures[ci].bite();
-            let hit = self.creatures[ti].take_hit(damage, 0.0, pos);
             let owner = self.owner_index(self.creatures[ci].owner.as_deref());
-            self.report_hit(owner, ti, damage, hit);
-            if hit != Hit::Hurt {
+            if self.strike(foe, damage, 0.0, pos, owner) {
                 self.creatures[ci].attack_target = None;
             }
         }
@@ -582,7 +665,7 @@ impl Sim {
 
     /// Jogador dono de cada membro da tribo (para a lista de alvos da IA).
     pub(super) fn member_ids(&self) -> Vec<u32> {
-        self.npcs.iter().filter(|n| n.owner.is_some()).map(|n| n.id).collect()
+        self.npcs.iter().filter(|n| n.is_member()).map(|n| n.id).collect()
     }
 
     /// Primeiro jogador num acampamento com dois membros da tribo (um coletando madeira perto de um
@@ -763,8 +846,8 @@ mod tests {
                 at: (pos + vec2(60.0, 0.0)).into(),
             }),
         );
-        assert_eq!(sim.npcs[ni].target, Some(dodo));
-        assert_eq!(sim.creature(raptor).unwrap().attack_target, Some(dodo));
+        assert_eq!(sim.npcs[ni].target, Some(Foe::Creature(dodo)));
+        assert_eq!(sim.creature(raptor).unwrap().attack_target, Some(Foe::Creature(dodo)));
         run(&mut sim, 6.0);
         assert!(sim.creature(dodo).is_none_or(|d| !d.is_alive()), "o dodô caiu");
     }
