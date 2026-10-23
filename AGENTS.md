@@ -14,7 +14,7 @@ cargo run -- --server [--port 7777] [--save saves/save.json] [--name "Nome"]   #
 cargo test                # lógica + servidor de verdade (cliente local e dois clientes TCP)
 cargo fmt && cargo clippy --all-targets -- -D warnings   # rustfmt.toml: max_width 120
 ISLAND_SHOT=out.png cargo run                          # smoke test: sobe servidor local, salva screenshot e sai
-ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, MOUNTAIN, COOP, MENU
+ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, FLY, CARGO, MOUNTAIN, COOP, MENU
 ISLAND_SHOT=out.png ISLAND_SHOT_HOUR=22 cargo run      # ajusta o relógio (combina com as cenas)
 ISLAND_SHOT=out.png ISLAND_SHOT_JOIN=127.0.0.1:7777 cargo run   # entra num servidor já rodando (teste com processos reais)
 ISLAND_NEW=1 ISLAND_SEED=42 cargo run  # ignora o save e gera outra ilha
@@ -46,7 +46,7 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 | `items.rs` / `inventory.rs` | Itens e inventário em slots (hotbar = slots `0..HOTBAR_SIZE`). |
 | `crafting.rs` | Receitas (tempo, estação, nível, custo de engrama) e fila de crafting. |
 | `building.rs` | Estruturas no grid, colisão, fogo (fogueira cozinha, forja funde). |
-| `creatures.rs` / `taming.rs` | Fauna (IA contra vários jogadores, dono de domesticados), torpor e domesticação. |
+| `creatures.rs` / `taming.rs` | Fauna (IA contra vários jogadores, dono de domesticados, voadores, peso de carga), torpor e domesticação. |
 | `gathering.rs` / `combat.rs` | Rendimento de coleta; pedras do estilingue. |
 | `daynight.rs` | Relógio do jogo e curvas de escuridão/entardecer. |
 | `render.rs` / `ui.rs` | Desenho do mundo (y-sort, vários avatares, iluminação) e HUD/painéis/chat. Só leem estado. |
@@ -58,10 +58,11 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 - Consultas usadas pelos dois lados (alvo do golpe, interação com F) são funções livres em `sim.rs`.
 - O snapshot manda inventários só do contêiner aberto por aquele jogador; o resto (tiles, posições dos nós) o cliente gera pela seed.
 - Coordenadas de mundo em pixels, Y para baixo, `TILE = 32`. `pos` de entidade = ponto do pé (base), usado no y-sort e na colisão.
-- Item novo: variante em `ItemId` + seus `match` em `items.rs` + ícone em `ui::draw_item_icon`.
+- Item novo: variante em `ItemId` + seus `match` em `items.rs` (inclusive `weight`) + ícone em `ui::draw_item_icon`.
 - Geração do mundo: não mude a sequência do RNG de `scatter_nodes` (saves guardam nós por índice). Nós novos vão no fim, com RNG próprio (ver `scatter_mountain_extras`).
 - Save: campo novo leva `#[serde(default)]`; quebrar o formato exige subir `SAVE_VERSION` e converter o antigo em `save.rs`.
-- Espécie nova: `Species` + seus `match` + `render::draw_creature`. Criaturas são referenciadas por `id`, nunca por índice guardado.
+- Espécie nova: `Species` + seus `match` + `render::draw_creature`. Voadora: `fly_speed` (no ar, colisão só com a borda do mapa; ver `Creature::flying`). Criaturas são referenciadas por `id`, nunca por índice guardado.
+- Voar não é salvo: ao carregar ou ao descer à força (morte, saída), voadores e jogadores vão para o chão livre mais próximo (`World::find_near`).
 - Estrutura nova: `StructureKind` + item + `render::draw_structure` + `render::structure_label` se for interativa.
 - Código e identificadores em inglês; textos do jogo e docs em português.
 - Antes de concluir: `cargo test`, `cargo clippy` sem warnings e um `ISLAND_SHOT` quando mexer em render/UI.

@@ -13,7 +13,7 @@ use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -101,6 +101,8 @@ pub enum Command {
     /// Alternar seguir/ficar do dino aberto.
     ToggleOrder,
     Mount,
+    /// Espaço montado num voador: decolar/pousar.
+    ToggleFlight,
     SpendAttribute(Attribute),
     Respawn,
     Chat(String),
@@ -186,6 +188,8 @@ pub struct CreatureView {
     pub hurt: f32,
     pub lunge: f32,
     pub mounted: bool,
+    pub flying: bool,
+    pub altitude: f32,
     pub chasing: bool,
     /// Tem sela (o inventário só vai junto quando o painel dela está aberto).
     pub saddled: bool,
@@ -206,6 +210,8 @@ impl CreatureView {
             hurt: c.hurt,
             lunge: c.lunge,
             mounted: c.mounted,
+            flying: c.flying,
+            altitude: c.altitude,
             chasing: c.state == State::Chase,
             saddled: c.can_ride(),
         }
@@ -219,6 +225,8 @@ impl CreatureView {
         c.hurt = self.hurt;
         c.lunge = self.lunge;
         c.mounted = self.mounted;
+        c.flying = self.flying;
+        c.altitude = self.altitude;
         if self.chasing {
             c.state = State::Chase;
         }

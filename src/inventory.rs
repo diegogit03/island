@@ -120,6 +120,15 @@ impl Inventory {
         Some(taken)
     }
 
+    /// Peso total das pilhas (ver `ItemId::weight`).
+    pub fn weight(&self) -> f32 {
+        self.slots
+            .iter()
+            .flatten()
+            .map(|s| s.item.weight() * s.count as f32)
+            .sum()
+    }
+
     pub fn count(&self, item: ItemId) -> u32 {
         self.slots
             .iter()

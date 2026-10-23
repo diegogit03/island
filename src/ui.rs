@@ -393,7 +393,8 @@ pub fn draw(hud: &Hud) {
         draw_panels(hud);
     } else {
         draw_queue_hud(hud.queue);
-        draw_hotbar(hud.inventory, hud.selected, hud.mount.is_some());
+        let bites = hud.mount.is_some_and(|m| m.species.attack().is_some());
+        draw_hotbar(hud.inventory, hud.selected, bites);
     }
 }
 
@@ -438,6 +439,7 @@ fn draw_help() {
     let lines = [
         "WASD: mover   Shift: correr   E / Clique: coletar ou beber   R / Botão dir.: comer",
         "F: interagir   Q: largar (Ctrl+Q: pilha)   Estrutura na mão: clique posiciona, X demole",
+        "Montado: E / Clique morde   Espaço: decolar/pousar (voadores)",
         "1-6 / Roda: hotbar   Tab / I: inventário   Enter: chat   F5: salvar   H: esconder ajuda",
     ];
     for (i, line) in lines.iter().enumerate() {
@@ -561,13 +563,24 @@ fn draw_xp_bar(p: &Progression) {
 fn draw_mount_bar(mount: &Creature) {
     let (x, w, h) = (16.0, 234.0, 10.0);
     let y = screen_height() - 30.0 - 5.0 * 24.0 - 14.0;
-    let label = format!("{} Nv {}   F: desmontar", mount.species.name(), mount.level);
+    let mut label = format!("{} Nv {}   F: desmontar", mount.species.name(), mount.level);
+    if mount.species.flies() {
+        label.push_str(if mount.flying {
+            "   Espaço: pousar"
+        } else {
+            "   Espaço: voar"
+        });
+    }
     shadowed(&label, x, y - 4.0, 18.0, OK);
+    if mount.overweight() {
+        shadowed("Sobrecarregado: lento e sem voar", x, y - 24.0, 18.0, BAD);
+    }
     draw_rectangle(x, y, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
     draw_rectangle(x, y, w * mount.health_frac(), h, Color::new(0.4, 0.8, 0.4, 1.0));
     draw_rectangle_lines(x, y, w, h, 1.0, BORDER);
 }
 
+/// `mounted`: a montaria morde com E / clique.
 fn draw_hotbar(inv: &Inventory, selected: usize, mounted: bool) {
     for (i, rect) in hotbar_slots().iter().enumerate() {
         draw_slot(*rect, inv.slots[i], i == selected);
@@ -814,7 +827,13 @@ fn draw_tamed_info(c: &Creature, area: Rect, buttons: &[Rect], m: Vec2) {
         _ => ("Seguindo você", "Ficar"),
     };
     draw_text(format!("Ordem: {order}"), area.x, area.y + 44.0, 18.0, TEXT);
+    let load = format!("Carga {:.0}/{:.0}", c.weight(), c.max_weight());
+    let load_color = if c.overweight() { BAD } else { TEXT };
+    let lw = measure_text(&load, None, 18, 1.0).width;
+    draw_text(&load, area.x + area.w - lw, area.y + 44.0, 18.0, load_color);
     let ride_hint = match c.species.saddle() {
+        _ if c.overweight() => "Sobrecarregado: anda devagar e não voa.".to_owned(),
+        Some(_) if c.can_ride() && c.species.flies() => "Pronto para montar. Espaço decola.".to_owned(),
         Some(_) if c.can_ride() => "Pronto para montar.".to_owned(),
         Some(saddle) => format!("Coloque uma {} aqui para montar.", saddle.name()),
         None => "Esta espécie não pode ser montada.".to_owned(),
@@ -1179,6 +1198,24 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
             rect_at(-12.0, -8.0, 6.0, 8.0, Color::from_rgba(150, 100, 56, 255));
             line(p(-4.0, 6.0), p(-6.0, 16.0), 2.0, wood_dark);
             line(p(6.0, 6.0), p(8.0, 16.0), 2.0, wood_dark);
+        }
+        ItemId::PteranodonSaddle => {
+            // Sela leve, com tiras que abraçam as asas.
+            let leather = Color::from_rgba(96, 78, 62, 255);
+            line(p(-17.0, -2.0), p(17.0, -2.0), 2.0, Color::from_rgba(150, 102, 80, 255));
+            draw_ellipse(c.x, c.y, 12.0 * u, 7.0 * u, 0.0, leather);
+            rect_at(-9.0, -7.0, 5.0, 6.0, Color::from_rgba(128, 104, 82, 255));
+            line(p(-3.0, 5.0), p(-5.0, 15.0), 2.0, wood_dark);
+            line(p(4.0, 5.0), p(6.0, 15.0), 2.0, wood_dark);
+        }
+        ItemId::ArgentavisSaddle => {
+            // Sela grande com fivela de metal.
+            let leather = Color::from_rgba(90, 58, 34, 255);
+            draw_ellipse(c.x, c.y, 18.0 * u, 10.0 * u, 0.0, leather);
+            rect_at(-14.0, -10.0, 7.0, 9.0, Color::from_rgba(132, 88, 50, 255));
+            rect_at(6.0, -9.0, 8.0, 8.0, Color::from_rgba(130, 130, 140, 255));
+            line(p(-6.0, 7.0), p(-8.0, 17.0), 2.5, wood_dark);
+            line(p(6.0, 7.0), p(8.0, 17.0), 2.5, wood_dark);
         }
         ItemId::Campfire => {
             line(p(-14.0, 12.0), p(14.0, 6.0), 6.0, wood);

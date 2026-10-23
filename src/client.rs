@@ -465,6 +465,9 @@ impl Client {
             if is_key_pressed(KeyCode::F) {
                 self.send(Command::Interact);
             }
+            if mounted && is_key_pressed(KeyCode::Space) {
+                self.send(Command::ToggleFlight);
+            }
         }
     }
 
@@ -588,7 +591,7 @@ impl Client {
 
         set_default_camera();
         render::draw_creature_bars(&self.creatures, &camera, me.mount);
-        render::draw_names(&avatars, &camera);
+        render::draw_names(&avatars, &self.creatures, &camera);
         render::draw_popups(&self.popups, &camera);
         if on_foot
             && let Some(r) = my
@@ -643,7 +646,7 @@ impl Client {
                 } else {
                     (
                         format!("[F] {} Nv {}", c.species.name(), c.level),
-                        c.pos - vec2(0.0, c.species.radius() * 2.8 + 24.0),
+                        c.pos - vec2(0.0, c.species.radius() * 2.8 + 24.0 + render::lift(c)),
                     )
                 }
             }

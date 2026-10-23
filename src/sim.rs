@@ -66,10 +66,11 @@ pub fn find_target(world: &World, creatures: &[Creature], p: &Player, held: Opti
         .filter(|(_, n)| n.is_alive())
         .filter_map(|(i, n)| score(n.pos, n.kind.collision_radius(), player::REACH).map(|s| (s, Target::Node(i))));
     // Domesticados não são alvo; desmaiados também não (bater reduz a efetividade).
+    // Voadores no ar só são alcançados pelo estilingue.
     let creatures = creatures
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.is_wild() && !c.knocked_out)
+        .filter(|(_, c)| c.is_wild() && !c.knocked_out && !c.flying)
         .filter_map(|(i, c)| {
             let (reach, bonus) = if c.is_alive() {
                 (weapon_reach, 10.0)
@@ -332,6 +333,14 @@ impl Sim {
                 c.id = sim.next_creature_id;
                 sim.next_creature_id += 1;
             }
+            // O save não guarda quem estava no ar: voadores salvos sobre água ou árvores pousam perto.
+            for c in sim.creatures.iter_mut().filter(|c| c.species.flies()) {
+                if !c.species.can_stand(&sim.world, c.pos)
+                    && let Some(spot) = c.landing_spot(&sim.world)
+                {
+                    c.pos = spot;
+                }
+            }
         }
         sim.offline = data.players;
         sim
@@ -393,6 +402,8 @@ impl Sim {
             None => PlayerState::new(id, name.clone(), self.world.spawn),
         };
         self.players.push(state);
+        // Salvo voando sobre a água ou dentro de algo: volta em terra firme.
+        self.rescue_player(self.players.len() - 1);
         // Domesticados de saves antigos (sem dono) passam a seguir quem entrou.
         for c in self.creatures.iter_mut().filter(|c| c.is_tamed() && c.owner.is_none()) {
             c.owner = Some(name.clone());
@@ -409,6 +420,17 @@ impl Sim {
         self.offline.retain(|s| s.name != p.name);
         self.offline.push(p.to_save());
         self.broadcast(format!("{} saiu", p.name));
+    }
+
+    /// Tira o jogador de um lugar onde ele não pode ficar (ex.: a montaria voadora sumiu no mar).
+    fn rescue_player(&mut self, pi: usize) {
+        let pos = self.players[pi].player.pos;
+        if !self.world.blocked(pos, player::RADIUS) {
+            return;
+        }
+        let world = &self.world;
+        let spot = world.find_near(pos, |p| !world.blocked(p, player::RADIUS));
+        self.players[pi].player.pos = spot.unwrap_or(world.spawn);
     }
 
     pub fn index(&self, id: PlayerId) -> Option<usize> {
@@ -615,6 +637,7 @@ impl Sim {
     // ---------- Fauna ----------
 
     fn update_creatures(&mut self, dt: f32) {
+        let flying_mounts: Vec<u32> = self.creatures.iter().filter(|c| c.flying).map(|c| c.id).collect();
         let ai_players: Vec<AiPlayer> = self
             .players
             .iter()
@@ -622,6 +645,7 @@ impl Sim {
                 pos: p.player.pos,
                 alive: !p.dead,
                 name: &p.name,
+                airborne: p.mount.is_some_and(|id| flying_mounts.contains(&id)),
             })
             .collect();
         let input = AiInput { players: &ai_players };
@@ -640,11 +664,13 @@ impl Sim {
         }
         self.update_projectiles(dt);
         self.creatures.retain(|c| !c.is_gone());
-        for p in &mut self.players {
-            if p.mount
-                .is_some_and(|id| !self.creatures.iter().any(|c| c.id == id && c.is_alive()))
-            {
-                p.mount = None;
+        for pi in 0..self.players.len() {
+            let gone = self.players[pi]
+                .mount
+                .is_some_and(|id| !self.creatures.iter().any(|c| c.id == id && c.is_alive()));
+            if gone {
+                self.players[pi].mount = None;
+                self.rescue_player(pi);
             }
         }
         for (pi, damage) in bites {
@@ -810,12 +836,22 @@ impl Sim {
         p.player.pos = pos;
     }
 
-    /// Desce da montaria para um lugar livre ao lado dela.
+    /// Desce da montaria para um lugar livre ao lado dela. No ar, a montaria pousa no chão livre
+    /// mais próximo antes (morte, saída do jogo); para descer por vontade própria, ver `Command::Interact`.
     fn dismount(&mut self, pi: usize) {
         let Some(id) = self.players[pi].mount.take() else {
             return;
         };
-        let Some(c) = self.creature_mut(id) else { return };
+        let world = &self.world;
+        let Some(c) = self.creatures.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        if c.flying && !c.try_land(world) {
+            if let Some(spot) = c.landing_spot(world) {
+                c.pos = spot;
+            }
+            c.flying = false;
+        }
         c.mounted = false;
         let (pos, r) = (c.pos, c.species.radius());
         let side = if c.facing_left { 1.0 } else { -1.0 };
@@ -835,7 +871,7 @@ impl Sim {
             return;
         };
         let sprint = if input.sprint { RIDE_SPRINT } else { 1.0 };
-        let speed = mount.species.speeds().1 * RIDE_MULT * sprint;
+        let speed = mount.ride_speed(RIDE_MULT, sprint);
         mount.ride(world, dir, speed, dt);
         let p = &mut self.players[pi];
         p.player.pos = mount.pos;
@@ -848,23 +884,47 @@ impl Sim {
         }
     }
 
-    /// A montaria morde o selvagem mais próximo à frente dela.
+    /// Espaço montado num voador: decola ou pousa.
+    fn toggle_flight(&mut self, pi: usize) {
+        let Some(id) = self.players[pi].mount else { return };
+        let world = &self.world;
+        let Some(mount) = self.creatures.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        if !mount.species.flies() {
+            return;
+        }
+        let message = if mount.flying {
+            (!mount.try_land(world)).then_some("Sem lugar para pousar aqui: procure chão livre")
+        } else if mount.overweight() {
+            Some("Carga pesada demais para voar")
+        } else {
+            mount.flying = true;
+            None
+        };
+        if let Some(text) = message {
+            self.notify(pi, text.to_owned());
+        }
+    }
+
+    /// A montaria morde o selvagem mais próximo à frente dela (no chão, não alcança quem voa).
     fn mount_bite(&mut self, pi: usize) {
         let Some(id) = self.players[pi].mount else { return };
         let Some(mount) = self.creature(id) else { return };
         if !mount.ready_to_bite() {
             return;
         }
-        let (pos, reach, s) = (
+        let (pos, reach, s, airborne) = (
             mount.pos,
             mount.species.radius() + 18.0,
             if mount.facing_left { -1.0 } else { 1.0 },
+            mount.flying,
         );
         let target = self
             .creatures
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.is_wild() && c.is_conscious())
+            .filter(|(_, c)| c.is_wild() && c.is_conscious() && (airborne || !c.flying))
             .map(|(i, c)| {
                 (
                     i,
@@ -1290,8 +1350,16 @@ impl Sim {
                 }
             }
             Command::Interact => {
-                if self.players[pi].mount.is_some() {
-                    self.dismount(pi);
+                let world = &self.world;
+                let mount = self.players[pi]
+                    .mount
+                    .and_then(|id| self.creatures.iter_mut().find(|c| c.id == id));
+                if let Some(mount) = mount {
+                    if mount.try_land(world) {
+                        self.dismount(pi);
+                    } else {
+                        self.notify(pi, "Pouse antes de descer (Espaço)".to_owned());
+                    }
                 } else if let Some(target) =
                     nearest_interaction(&self.world, &self.creatures, self.players[pi].player.pos)
                 {
@@ -1337,6 +1405,7 @@ impl Sim {
                     }
                 }
             }
+            Command::ToggleFlight => self.toggle_flight(pi),
             Command::Mount => {
                 if let Some(ContainerRef::Creature(id)) = self.players[pi].container {
                     self.close_container(pi);
@@ -1562,6 +1631,8 @@ impl Sim {
             vec2(-40.0, 80.0),
             vec2(70.0, 70.0),
             vec2(120.0, 10.0),
+            vec2(-130.0, -30.0),
+            vec2(150.0, 90.0),
         ];
         for (species, offset) in Species::ALL.into_iter().zip(offsets) {
             let mut c = Creature::new(species, base + offset);
@@ -1571,8 +1642,54 @@ impl Sim {
         let mut corpse = Creature::new(Species::Dodo, base + vec2(40.0, -50.0));
         corpse.take_hit(999.0, 0.0, base);
         self.add_creature(corpse);
-        let dilo = self.creatures.len() - 3;
+        let dilo = self.creatures.len() - 5;
         self.creatures[dilo].take_hit(30.0, 20.0, base);
+    }
+
+    /// Domesticado da espécie, com sela e dono = primeiro jogador.
+    fn demo_tamed(&mut self, species: Species, pos: Vec2, level: u32) -> u32 {
+        let mut c = Creature::new(species, pos).with_level(level);
+        c.command = Some(Order::Follow);
+        c.owner = Some(self.players[0].name.clone());
+        let mut pack = Inventory::new(species.pack_slots());
+        if let Some(saddle) = species.saddle() {
+            pack.add(saddle, 1);
+        }
+        c.inventory = Some(pack);
+        self.add_creature(c)
+    }
+
+    /// Jogador voando num pteranodonte, um argentavis domesticado voando junto e um selvagem no ar.
+    pub fn demo_flying(&mut self) {
+        self.creatures.clear();
+        let base = self.players[0].player.pos;
+        let ptera = self.demo_tamed(Species::Pteranodon, base, 15);
+        let argy = self.demo_tamed(Species::Argentavis, base + vec2(-70.0, 40.0), 20);
+        let mut wild = Creature::new(Species::Pteranodon, base + vec2(140.0, -60.0)).with_level(8);
+        wild.facing_left = true;
+        self.add_creature(wild);
+        self.mount_creature(0, ptera);
+        for c in &mut self.creatures {
+            if c.id == ptera || c.id == argy || c.is_wild() {
+                c.flying = true;
+                c.altitude = 1.0;
+                c.moving = true;
+            }
+        }
+    }
+
+    /// Painel de carga de um argentavis domesticado.
+    pub fn demo_cargo(&mut self) {
+        self.creatures.clear();
+        let base = self.players[0].player.pos;
+        let id = self.demo_tamed(Species::Argentavis, base + vec2(34.0, 0.0), 20);
+        if let Some(inv) = self.creature_mut(id).and_then(|c| c.inventory.as_mut()) {
+            inv.add(ItemId::Stone, 100);
+            inv.add(ItemId::Wood, 100);
+            inv.add(ItemId::MetalOre, 60);
+        }
+        self.demo_tamed(Species::Pteranodon, base + vec2(-40.0, 30.0), 10);
+        self.players[0].container = Some(ContainerRef::Creature(id));
     }
 
     /// Uma segunda jogadora ("Bia") ao lado do primeiro, com picareta e uma mensagem no chat.
@@ -1799,6 +1916,91 @@ mod tests {
         assert_eq!(sim.players[0].vitals.health, health, "a montaria protege");
         sim.command(ids[0], Command::Interact);
         assert_eq!(sim.players[0].mount, None, "F desmonta");
+    }
+
+    /// Primeiro jogador montado num voador domesticado com sela, ao lado dele.
+    fn mount_flyer(sim: &mut Sim, species: Species) -> u32 {
+        sim.creatures.clear();
+        let id = sim.demo_tamed(species, sim.players[0].player.pos, 1);
+        sim.mount_creature(0, id);
+        assert_eq!(sim.players[0].mount, Some(id));
+        id
+    }
+
+    #[test]
+    fn flying_mount_crosses_the_sea_and_lands_on_the_way_out() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        let id = mount_flyer(&mut sim, Species::Pteranodon);
+        sim.command(ids[0], Command::ToggleFlight);
+        assert!(sim.creature(id).unwrap().flying);
+        // Voa do centro da ilha para fora (o spawn é na praia) até estar sobre o mar aberto.
+        let out = (sim.players[0].player.pos - sim.world.size_px() / 2.0).normalize();
+        sim.set_input(
+            ids[0],
+            Input {
+                dir: out.into(),
+                ..Input::default()
+            },
+        );
+        for _ in 0..60 * 30 {
+            sim.tick(1.0 / 60.0);
+            if sim.world.tile_at(sim.players[0].player.pos) == Tile::DeepWater {
+                break;
+            }
+        }
+        let pos = sim.players[0].player.pos;
+        assert_eq!(sim.world.tile_at(pos), Tile::DeepWater, "chegou ao mar: {pos}");
+
+        // F e Espaço não descem nem pousam na água.
+        sim.command(ids[0], Command::Interact);
+        sim.command(ids[0], Command::ToggleFlight);
+        assert_eq!(sim.players[0].mount, Some(id));
+        assert!(sim.creature(id).unwrap().flying);
+
+        // Sair do jogo voando: a montaria pousa em terra e o jogador fica ao lado dela.
+        sim.leave(ids[0]);
+        let ptera = sim.creature(id).unwrap();
+        assert!(!ptera.flying && Species::Pteranodon.can_stand(&sim.world, ptera.pos));
+        let back = sim.join("Ana");
+        let pi = sim.index(back).unwrap();
+        assert!(!sim.world.blocked(sim.players[pi].player.pos, player::RADIUS));
+    }
+
+    #[test]
+    fn ground_predators_ignore_riders_in_the_air() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        let id = mount_flyer(&mut sim, Species::Pteranodon);
+        sim.command(ids[0], Command::ToggleFlight);
+        let pos = sim.players[0].player.pos;
+        let raptor = sim.add_creature(Creature::new(Species::Raptor, pos + vec2(20.0, 0.0)));
+        for _ in 0..120 {
+            sim.tick(1.0 / 60.0);
+        }
+        assert_eq!(sim.creature(id).unwrap().health_frac(), 1.0, "raptor não alcança");
+        assert!(sim.creature(raptor).is_some());
+        // Bate só no chão: ninguém no ar é alvo de golpe corpo a corpo.
+        let mut wild = Creature::new(Species::Pteranodon, pos + vec2(10.0, 0.0));
+        wild.flying = true;
+        let p = Player::new(pos);
+        assert_eq!(find_target(&sim.world, &[wild], &p, None), None);
+    }
+
+    #[test]
+    fn overloaded_argentavis_cannot_take_off() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        let id = mount_flyer(&mut sim, Species::Argentavis);
+        let argy = sim.creature_mut(id).unwrap();
+        let light = argy.ride_speed(RIDE_MULT, 1.0);
+        argy.inventory.as_mut().unwrap().add(ItemId::Stone, 100);
+        argy.inventory.as_mut().unwrap().add(ItemId::Stone, 100);
+        assert!(!argy.overweight(), "argentavis aguenta 200 pedras");
+        for _ in 0..3 {
+            argy.inventory.as_mut().unwrap().add(ItemId::MetalIngot, 100);
+        }
+        assert!(argy.overweight());
+        assert!(argy.ride_speed(RIDE_MULT, 1.0) < light, "fica lento");
+        sim.command(ids[0], Command::ToggleFlight);
+        assert!(!sim.creature(id).unwrap().flying);
     }
 
     #[test]

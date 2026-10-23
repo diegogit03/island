@@ -1,6 +1,7 @@
 //! Fauna: espécies, níveis, IA simples (parado, vagando, fugindo, perseguindo), torpor/desmaio,
 //! domesticação e comportamento de dinos domesticados (seguir, ficar, montaria).
-//! Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
+//! Voadores (pteranodonte, argentavis) decolam para se mover e pousam ao parar; no ar ignoram
+//! árvores, pedras e construções. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,10 @@ const FOLLOW_DISTANCE: f32 = 48.0;
 const FOLLOW_TELEPORT: f32 = 700.0;
 /// Regeneração de vida de domesticados (fração do máximo por segundo).
 const TAMED_REGEN: f32 = 0.01;
+/// Velocidade de subida/descida da altitude desenhada (0 = chão, 1 = voando), por segundo.
+const CLIMB_RATE: f32 = 2.5;
+/// Voadores ficam a esta distância da borda do mapa (em pixels).
+const FLY_MARGIN: f32 = TILE * 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Species {
@@ -39,6 +44,8 @@ pub enum Species {
     Trilobite,
     Dilophosaur,
     Raptor,
+    Pteranodon,
+    Argentavis,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +55,14 @@ pub enum Temperament {
 }
 
 impl Species {
-    pub const ALL: [Species; 4] = [Species::Dodo, Species::Trilobite, Species::Dilophosaur, Species::Raptor];
+    pub const ALL: [Species; 6] = [
+        Species::Dodo,
+        Species::Trilobite,
+        Species::Dilophosaur,
+        Species::Raptor,
+        Species::Pteranodon,
+        Species::Argentavis,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -56,14 +70,29 @@ impl Species {
             Species::Trilobite => "Trilobita",
             Species::Dilophosaur => "Dilofossauro",
             Species::Raptor => "Raptor",
+            Species::Pteranodon => "Pteranodonte",
+            Species::Argentavis => "Argentavis",
         }
     }
 
     pub fn temperament(self) -> Temperament {
         match self {
-            Species::Dodo | Species::Trilobite => Temperament::Passive,
-            Species::Dilophosaur | Species::Raptor => Temperament::Aggressive,
+            Species::Dodo | Species::Trilobite | Species::Pteranodon => Temperament::Passive,
+            Species::Dilophosaur | Species::Raptor | Species::Argentavis => Temperament::Aggressive,
         }
+    }
+
+    /// Velocidade de voo montado, em pixels/s (`None` = não voa). A IA voa a uma fração disso.
+    pub fn fly_speed(self) -> Option<f32> {
+        match self {
+            Species::Pteranodon => Some(400.0),
+            Species::Argentavis => Some(280.0),
+            _ => None,
+        }
+    }
+
+    pub fn flies(self) -> bool {
+        self.fly_speed().is_some()
     }
 
     /// Vida no nível 1.
@@ -73,6 +102,8 @@ impl Species {
             Species::Trilobite => 25.0,
             Species::Dilophosaur => 60.0,
             Species::Raptor => 90.0,
+            Species::Pteranodon => 70.0,
+            Species::Argentavis => 150.0,
         }
     }
 
@@ -83,6 +114,8 @@ impl Species {
             Species::Trilobite => 40.0,
             Species::Dilophosaur => 80.0,
             Species::Raptor => 120.0,
+            Species::Pteranodon => 70.0,
+            Species::Argentavis => 160.0,
         }
     }
 
@@ -93,6 +126,9 @@ impl Species {
             Species::Trilobite => (20.0, 45.0),
             Species::Dilophosaur => (50.0, 115.0),
             Species::Raptor => (60.0, 170.0),
+            // Voadores são desajeitados no chão.
+            Species::Pteranodon => (35.0, 95.0),
+            Species::Argentavis => (35.0, 85.0),
         }
     }
 
@@ -102,6 +138,8 @@ impl Species {
             Species::Trilobite => 8.0,
             Species::Dilophosaur => 11.0,
             Species::Raptor => 12.0,
+            Species::Pteranodon => 10.0,
+            Species::Argentavis => 13.0,
         }
     }
 
@@ -110,6 +148,7 @@ impl Species {
         match self {
             Species::Dilophosaur => Some((8.0, 1.4, 12.0, 160.0)),
             Species::Raptor => Some((12.0, 1.1, 12.0, 220.0)),
+            Species::Argentavis => Some((14.0, 1.4, 14.0, 180.0)),
             _ => None,
         }
     }
@@ -118,20 +157,20 @@ impl Species {
     pub fn harvest_hits(self) -> u32 {
         match self {
             Species::Dodo | Species::Trilobite => 3,
-            Species::Dilophosaur => 5,
-            Species::Raptor => 6,
+            Species::Dilophosaur | Species::Pteranodon => 5,
+            Species::Raptor | Species::Argentavis => 6,
         }
     }
 
     /// Animais maiores rendem mais carne/couro.
     pub fn is_big(self) -> bool {
-        matches!(self, Species::Dilophosaur | Species::Raptor)
+        matches!(self, Species::Dilophosaur | Species::Raptor | Species::Argentavis)
     }
 
     pub fn diet(self) -> Diet {
         match self {
             Species::Dodo | Species::Trilobite => Diet::Herbivore,
-            Species::Dilophosaur | Species::Raptor => Diet::Carnivore,
+            Species::Dilophosaur | Species::Raptor | Species::Pteranodon | Species::Argentavis => Diet::Carnivore,
         }
     }
 
@@ -142,6 +181,8 @@ impl Species {
             Species::Trilobite => None,
             Species::Dilophosaur => Some(100.0),
             Species::Raptor => Some(160.0),
+            Species::Pteranodon => Some(130.0),
+            Species::Argentavis => Some(220.0),
         }
     }
 
@@ -149,7 +190,21 @@ impl Species {
     pub fn saddle(self) -> Option<ItemId> {
         match self {
             Species::Raptor => Some(ItemId::RaptorSaddle),
+            Species::Pteranodon => Some(ItemId::PteranodonSaddle),
+            Species::Argentavis => Some(ItemId::ArgentavisSaddle),
             _ => None,
+        }
+    }
+
+    /// Peso que a criatura carrega no nível 1 (ver `ItemId::weight`).
+    pub fn carry_weight(self) -> f32 {
+        match self {
+            Species::Dodo => 40.0,
+            Species::Trilobite => 20.0,
+            Species::Dilophosaur => 80.0,
+            Species::Raptor => 150.0,
+            Species::Pteranodon => 80.0,
+            Species::Argentavis => 320.0,
         }
     }
 
@@ -160,6 +215,8 @@ impl Species {
             Species::Trilobite => 4,
             Species::Dilophosaur => 8,
             Species::Raptor => 12,
+            Species::Pteranodon => 8,
+            Species::Argentavis => 20,
         }
     }
 
@@ -170,6 +227,8 @@ impl Species {
             Species::Trilobite => 15,
             Species::Dilophosaur => 10,
             Species::Raptor => 6,
+            Species::Pteranodon => 6,
+            Species::Argentavis => 4,
         }
     }
 
@@ -181,6 +240,8 @@ impl Species {
             Species::Dodo => tile == Tile::Grass,
             Species::Dilophosaur => tile == Tile::Grass && world.forest(x, y) > 0.45,
             Species::Raptor => tile == Tile::Grass && world.forest(x, y) > 0.55,
+            Species::Pteranodon => tile == Tile::Sand,
+            Species::Argentavis => tile == Tile::Mountain,
         }
     }
 
@@ -191,6 +252,15 @@ impl Species {
             tile => tile.walkable(),
         };
         tile_ok && !world.blocked(pos, self.radius())
+    }
+
+    /// Onde um voador pode estar no ar. Selvagens ficam sobre terra ou água rasa (para não
+    /// desmaiarem no mar); domesticados e montarias vão a qualquer lugar dentro do mapa.
+    pub fn can_fly_over(self, world: &World, pos: Vec2, wild: bool) -> bool {
+        let size = world.size_px();
+        let inside =
+            pos.x >= FLY_MARGIN && pos.y >= FLY_MARGIN && pos.x <= size.x - FLY_MARGIN && pos.y <= size.y - FLY_MARGIN;
+        inside && (!wild || world.tile_at(pos).walkable())
     }
 }
 
@@ -253,6 +323,10 @@ pub struct Creature {
     pub owner: Option<String>,
     /// Controlado pelo jogador montado: a IA não age.
     pub mounted: bool,
+    /// No ar: colide só com a borda do mapa e não leva golpes corpo a corpo.
+    pub flying: bool,
+    /// Altura desenhada (0 = chão, 1 = voando); acompanha `flying` aos poucos.
+    pub altitude: f32,
     pub facing_left: bool,
     pub state: State,
     state_timer: f32,
@@ -273,6 +347,8 @@ pub struct AiPlayer<'a> {
     pub pos: Vec2,
     pub alive: bool,
     pub name: &'a str,
+    /// Montado num voador no ar: só outros voadores o alcançam.
+    pub airborne: bool,
 }
 
 /// O que a IA sabe sobre os jogadores neste frame.
@@ -281,12 +357,12 @@ pub struct AiInput<'a> {
 }
 
 impl AiInput<'_> {
-    /// Jogador vivo mais próximo: (índice, vetor até ele).
-    fn nearest_alive(&self, from: Vec2) -> Option<(usize, Vec2)> {
+    /// Jogador vivo mais próximo ao alcance de quem procura (`flier`: alcança quem está no ar).
+    fn nearest_alive(&self, from: Vec2, flier: bool) -> Option<(usize, Vec2)> {
         self.players
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.alive)
+            .filter(|(_, p)| p.alive && (flier || !p.airborne))
             .map(|(i, p)| (i, p.pos - from))
             .min_by(|a, b| a.1.length_squared().total_cmp(&b.1.length_squared()))
     }
@@ -315,6 +391,8 @@ impl Creature {
             command: None,
             owner: None,
             mounted: false,
+            flying: false,
+            altitude: 0.0,
             facing_left: false,
             state: State::Idle,
             state_timer: 1.0,
@@ -375,6 +453,33 @@ impl Creature {
         (self.torpor / self.max_torpor()).clamp(0.0, 1.0)
     }
 
+    pub fn max_weight(&self) -> f32 {
+        self.species.carry_weight() * self.level_mult(0.02)
+    }
+
+    /// Peso do inventário (sela incluída).
+    pub fn weight(&self) -> f32 {
+        self.inventory.as_ref().map_or(0.0, Inventory::weight)
+    }
+
+    /// Domesticado com carga acima do limite: anda devagar e não decola.
+    pub fn overweight(&self) -> bool {
+        self.is_tamed() && self.weight() > self.max_weight()
+    }
+
+    /// Pode decolar agora (voador acordado e sem excesso de carga).
+    pub fn can_take_off(&self) -> bool {
+        self.species.flies() && self.is_conscious() && !self.overweight()
+    }
+
+    /// Pousa se houver chão livre embaixo. Retorna se está no chão.
+    pub fn try_land(&mut self, world: &World) -> bool {
+        if self.flying && self.species.can_stand(world, self.pos) {
+            self.flying = false;
+        }
+        !self.flying
+    }
+
     /// Domesticado com a sela da espécie no inventário.
     pub fn can_ride(&self) -> bool {
         let saddle = self.species.saddle();
@@ -394,6 +499,7 @@ impl Creature {
         if self.health <= 0.0 {
             self.health = 0.0;
             self.knocked_out = false;
+            self.flying = false;
             self.taming = None;
             self.state = State::Idle;
             self.corpse = Some(Corpse {
@@ -432,6 +538,8 @@ impl Creature {
     fn knock_out(&mut self) {
         self.torpor = self.max_torpor();
         self.knocked_out = true;
+        // Voador desmaiado cai (selvagens só voam sobre terra ou água rasa).
+        self.flying = false;
         self.state = State::Idle;
         self.moving = false;
         if self.inventory.is_none() {
@@ -470,6 +578,8 @@ impl Creature {
         self.hurt = (self.hurt - dt).max(0.0);
         self.lunge = (self.lunge - dt).max(0.0);
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        let goal = if self.flying { 1.0 } else { 0.0 };
+        self.altitude += (goal - self.altitude).clamp(-CLIMB_RATE * dt, CLIMB_RATE * dt);
         if let Some(corpse) = self.corpse.as_mut() {
             corpse.ttl -= dt;
             return None;
@@ -490,7 +600,7 @@ impl Creature {
             self.moving = false;
             return None;
         }
-        let (target, to_player, dist) = match input.nearest_alive(self.pos) {
+        let (target, to_player, dist) = match input.nearest_alive(self.pos, self.species.flies()) {
             Some((i, v)) => (Some(i), v, v.length()),
             None => (None, Vec2::ZERO, f32::INFINITY),
         };
@@ -506,11 +616,34 @@ impl Creature {
             }
         }
 
-        let (walk, run) = self.species.speeds();
+        // Voadores selvagens decolam para se mover: vagando devagar, fugindo/caçando mais rápido.
+        let fly = self.species.fly_speed();
+        let (walk, run, chase) = match fly {
+            Some(f) => (f * 0.3, f * 0.75, f * 0.6),
+            None => {
+                let (walk, run) = self.species.speeds();
+                (walk, run, run)
+            }
+        };
+        if fly.is_some() {
+            // Caçando alguém no chão, pousa para morder (e fica ao alcance de golpes).
+            let biting_ground = self.state == State::Chase
+                && target.is_some_and(|i| !input.players[i].airborne)
+                && self
+                    .species
+                    .attack()
+                    .is_some_and(|a| dist - self.species.radius() <= a.2 + 8.0);
+            if self.state == State::Idle || biting_ground {
+                self.try_land(world);
+            } else {
+                self.flying = true;
+            }
+        }
         match self.state {
             State::Idle => {
                 if self.state_timer <= 0.0 {
-                    let offset = vec2(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)) * 120.0;
+                    let range = if fly.is_some() { 300.0 } else { 120.0 };
+                    let offset = vec2(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)) * range;
                     self.wander_target = self.pos + offset;
                     self.state = State::Wander;
                     self.state_timer = rng.range(3.0, 6.0);
@@ -545,7 +678,7 @@ impl Creature {
                         });
                     }
                 } else {
-                    self.step(world, to_player, run, dt);
+                    self.step(world, to_player, chase, dt);
                 }
             }
         }
@@ -619,6 +752,7 @@ impl Creature {
         self.health = (self.health + self.max_health() * TAMED_REGEN * dt).min(self.max_health());
         self.moving = false;
         if self.command != Some(Command::Follow) {
+            self.try_land(world);
             return;
         }
         // Segue o dono (se ele estiver no jogo e vivo).
@@ -629,33 +763,60 @@ impl Creature {
             .find(|p| p.alive && Some(p.name) == owner)
             .map(|p| p.pos)
         else {
+            self.try_land(world);
             return;
         };
         let to_player = owner_pos - self.pos;
         let dist = to_player.length();
         if dist > FOLLOW_TELEPORT {
-            // Ficou para trás (preso atrás de algo): aparece perto do dono.
+            // Ficou para trás (preso atrás de algo): aparece perto do dono, no ar se for voador.
             let behind = owner_pos - to_player.normalize_or_zero() * FOLLOW_DISTANCE;
             if self.species.can_stand(world, behind) {
                 self.pos = behind;
+                self.flying = false;
+            } else if self.can_take_off() && self.species.can_fly_over(world, behind, false) {
+                self.pos = behind;
+                self.flying = true;
             }
             return;
         }
-        if dist > FOLLOW_DISTANCE {
-            let (walk, run) = self.species.speeds();
-            let speed = if dist > FOLLOW_DISTANCE * 3.0 {
-                run.max(150.0)
-            } else {
-                walk.max(90.0)
-            };
-            self.step(world, to_player, speed, dt);
+        if dist <= FOLLOW_DISTANCE {
+            self.try_land(world);
+            return;
         }
+        // Voadores voam para acompanhar o dono (inclusive sobre a água).
+        if self.can_take_off() {
+            self.flying = true;
+        }
+        let (walk, run) = self.species.speeds();
+        let speed = match self.species.fly_speed() {
+            Some(fly) if self.flying => fly * 0.6,
+            _ if dist > FOLLOW_DISTANCE * 3.0 => run.max(150.0),
+            _ => walk.max(90.0),
+        };
+        self.step(world, to_player, speed, dt);
     }
 
     /// Movimento controlado pelo jogador montado.
     pub fn ride(&mut self, world: &World, dir: Vec2, speed: f32, dt: f32) {
         self.moving = false;
         self.step(world, dir, speed, dt);
+    }
+
+    /// Velocidade montado: voo da espécie no ar, corrida vezes `ground_mult` no chão;
+    /// `sprint` multiplica e excesso de carga corta pela metade.
+    pub fn ride_speed(&self, ground_mult: f32, sprint: f32) -> f32 {
+        let base = match self.species.fly_speed() {
+            Some(fly) if self.flying => fly,
+            _ => self.species.speeds().1 * ground_mult,
+        };
+        let load = if self.overweight() { 0.5 } else { 1.0 };
+        base * sprint * load
+    }
+
+    /// Lugar mais próximo onde a criatura pode ficar no chão (para pousos forçados).
+    pub fn landing_spot(&self, world: &World) -> Option<Vec2> {
+        world.find_near(self.pos, |p| self.species.can_stand(world, p))
     }
 
     /// Bote da montaria: pode atacar de novo?
@@ -695,9 +856,15 @@ impl Creature {
         }
         let start = self.pos;
         let delta = dir * speed * dt;
+        let wild = self.is_wild();
         for axis in [vec2(delta.x, 0.0), vec2(0.0, delta.y)] {
             let next = self.pos + axis;
-            if self.species.can_stand(world, next) {
+            let free = if self.flying {
+                self.species.can_fly_over(world, next, wild)
+            } else {
+                self.species.can_stand(world, next)
+            };
+            if free {
                 self.pos = next;
             }
         }
@@ -868,6 +1035,7 @@ mod tests {
             pos: player,
             alive: true,
             name: "p",
+            airborne: false,
         }];
         let input = AiInput { players: &players };
         (0..(secs / dt) as usize)
@@ -1017,6 +1185,81 @@ mod tests {
         let mut dodo = Creature::new(Species::Dodo, Vec2::ZERO);
         dodo.become_tamed(0);
         assert!(!dodo.can_ride(), "dodô não tem sela");
+    }
+
+    #[test]
+    fn pteranodon_is_the_fastest_and_argentavis_carries_the_most() {
+        let fly = |s: Species| s.fly_speed().unwrap();
+        assert!(fly(Species::Pteranodon) > fly(Species::Argentavis));
+        let fastest_ground = Species::ALL.iter().map(|s| s.speeds().1).fold(0.0, f32::max);
+        assert!(
+            fly(Species::Argentavis) > fastest_ground * 1.4,
+            "argentavis voando > raptor montado"
+        );
+        for s in Species::ALL.into_iter().filter(|&s| s != Species::Argentavis) {
+            assert!(Species::Argentavis.carry_weight() > s.carry_weight(), "{s:?}");
+        }
+        assert!(Species::Pteranodon.saddle().is_some() && Species::Argentavis.saddle().is_some());
+    }
+
+    #[test]
+    fn wild_pteranodon_flies_away_and_lands_when_calm() {
+        let world = world();
+        let pos = open_grass(&world, Species::Pteranodon);
+        let mut ptera = Creature::new(Species::Pteranodon, pos);
+        let player = pos - vec2(20.0, 0.0);
+        ptera.take_hit(5.0, 0.0, player);
+        run(&mut ptera, &world, player, 0.5);
+        assert!(ptera.flying && ptera.altitude > 0.5, "foge voando");
+        assert!(ptera.pos.distance(player) > 60.0);
+        // Longe e calmo: pousa em algum momento.
+        let mut c = Creature::new(Species::Pteranodon, pos);
+        c.flying = true;
+        let players = [AiPlayer {
+            pos: pos + vec2(300.0, 0.0),
+            alive: true,
+            name: "p",
+            airborne: false,
+        }];
+        let input = AiInput { players: &players };
+        let mut rng = Rng::new(1);
+        let landed = (0..600).any(|_| {
+            c.update(&world, &input, &mut rng, 1.0 / 30.0);
+            !c.flying
+        });
+        assert!(landed, "pousa quando para");
+    }
+
+    #[test]
+    fn only_flyers_reach_riders_in_the_air() {
+        let input = AiInput {
+            players: &[AiPlayer {
+                pos: vec2(10.0, 0.0),
+                alive: true,
+                name: "p",
+                airborne: true,
+            }],
+        };
+        assert!(input.nearest_alive(Vec2::ZERO, false).is_none());
+        assert!(input.nearest_alive(Vec2::ZERO, true).is_some());
+    }
+
+    #[test]
+    fn argentavis_hunts_flying_and_lands_to_bite() {
+        let world = world();
+        let pos = open_grass(&world, Species::Argentavis);
+        let mut argy = Creature::new(Species::Argentavis, pos);
+        let events = run(&mut argy, &world, pos + vec2(30.0, 0.0), 3.0);
+        assert!(events.iter().any(|e| matches!(e, Event::Bite { target: 0, .. })));
+        assert!(!argy.flying, "pousado ao morder quem está no chão");
+    }
+
+    #[test]
+    fn knocked_out_flyer_falls() {
+        let mut argy = Creature::new(Species::Argentavis, Vec2::ZERO);
+        argy.flying = true;
+        assert_eq!(argy.take_hit(0.0, 9999.0, Vec2::ONE), Hit::KnockedOut);
+        assert!(!argy.flying);
     }
 
     #[test]

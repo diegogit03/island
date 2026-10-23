@@ -6,7 +6,7 @@
 
 Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, construa, domestique dinossauros e jogue com amigos na rede local. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop.
 
-## O que já tem (v0.7)
+## O que já tem (v0.7 + início da v0.8)
 
 - Ilha procedural com praia, água rasa e água funda
 - Coleta de madeira, palha, pedra, sílex e frutinhas
@@ -17,6 +17,8 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Fauna: dodôs e trilobitas passivos, dilofossauros e raptores agressivos; combate e carcaças com carne e couro
 - Fogueira que cozinha carne
 - Domesticação: derrube dinos com clava ou estilingue, alimente-os desacordados e monte num raptor com sela
+- **Criaturas voadoras**: pteranodonte (o mais rápido) e argentavis (carrega mais peso), montáveis com sela; voe sobre a ilha e o mar
+- Peso de carga dos dinos: carregado demais, o dino fica lento e não decola
 - Criaturas com níveis (1–30)
 - Progressão: XP, nível, pontos de atributo e engramas (receitas desbloqueadas por nível)
 - Montanha com metal, forja e ferramentas/espada de metal
@@ -47,6 +49,7 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | Tab / I | Inventário, personagem (atributos) e crafting/engramas |
 | Q / Ctrl+Q | Largar 1 item / a pilha |
 | F | Interagir: pegar itens, abrir porta/baú/fogueira, usar bancada, abrir dino (alimentar/comandar); montado: desmontar |
+| Espaço | Montado num voador: decolar/pousar |
 | F5 | Salvar |
 | H | Mostrar/esconder ajuda |
 | Enter | Chat |

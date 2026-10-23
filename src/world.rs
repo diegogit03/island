@@ -388,6 +388,29 @@ impl World {
         });
     }
 
+    /// Ponto mais próximo de `from` (em anéis de meio tile) que satisfaz `ok`; testa até o mapa todo.
+    /// Para pousos forçados e jogadores que voltam ao jogo em cima da água.
+    pub fn find_near(&self, from: Vec2, ok: impl Fn(Vec2) -> bool) -> Option<Vec2> {
+        if ok(from) {
+            return Some(from);
+        }
+        let step = TILE / 2.0;
+        let max_ring = (self.width.max(self.height) as f32 * 2.0) as usize;
+        for ring in 1..=max_ring {
+            let r = ring as f32 * step;
+            let points = (std::f32::consts::TAU * r / step).ceil().max(8.0) as usize;
+            for i in 0..points {
+                let angle = i as f32 / points as f32 * std::f32::consts::TAU;
+                let p = from + vec2(angle.cos(), angle.sin()) * r;
+                // Água funda é descartada antes da checagem de colisão (bem mais cara).
+                if self.tile_at(p).is_land() && ok(p) {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
     /// Bolsa mais próxima dentro de `reach`.
     pub fn nearest_bag(&self, pos: Vec2, reach: f32) -> Option<usize> {
         self.bags

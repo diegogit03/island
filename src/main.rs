@@ -204,7 +204,8 @@ fn start_session(choice: Choice, name: &str) -> Result<(Connection, Option<Serve
 
 /// Smoke test: ISLAND_SHOT=caminho.png salva um screenshot e encerra (sem ler/gravar save).
 /// Cenas: ISLAND_SHOT_INVENTORY, _DEAD, _BUILD, _HOUR=22, _CREATURES, _FIRE, _TAME, _RIDE, _PET,
-/// _MOUNTAIN e _COOP (um segundo jogador "Bia" ao lado, com mensagem no chat).
+/// _MOUNTAIN, _COOP (um segundo jogador "Bia" ao lado, com mensagem no chat), _FLY (voando de
+/// pteranodonte com um argentavis) e _CARGO (painel de carga do argentavis).
 /// Com ISLAND_SHOT_JOIN=ip:porta, entra num servidor já rodando em vez de subir um local;
 /// ISLAND_SHOT_MENU mostra o menu principal.
 async fn screenshot(path: &str) {
@@ -243,6 +244,12 @@ async fn screenshot(path: &str) {
         }
         if env("ISLAND_SHOT_PET").is_some() {
             sim.demo_pet_panel();
+        }
+        if env("ISLAND_SHOT_FLY").is_some() {
+            sim.demo_flying();
+        }
+        if env("ISLAND_SHOT_CARGO").is_some() {
+            sim.demo_cargo();
         }
         if env("ISLAND_SHOT_FIRE").is_some() {
             sim.build_demo_base();

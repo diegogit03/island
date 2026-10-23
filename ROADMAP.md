@@ -67,7 +67,11 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Decisão: continuar no macroquad (a rede independe da engine; Bevy exigiria reescrever render e UI)
 - Ainda não: predição no cliente (pensado para LAN; pela internet a latência aparece), tribos separadas e PvP
 
-## v0.8 — Conteúdo e polimento
+## 🚧 v0.8 — Conteúdo e polimento
+- ✅ Criaturas voadoras montáveis com sela: **pteranodonte** (o mais rápido do jogo, carrega pouco) e **argentavis** (velocidade média, carrega muito; caça e pousa para morder)
+  - Espaço decola/pousa; no ar ignora árvores, pedras, construções e água; predadores do chão não alcançam quem voa
+  - Pouso forçado em terra ao morrer, sair do jogo ou perder a montaria no ar
+- ✅ Peso de carga dos dinos (cada item tem peso; acima do limite o dino fica lento e não decola)
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
 - Áudio (macroquad já suporta), menus, opções, rebind de teclas
 - Biomas de selva e pântano, cavernas

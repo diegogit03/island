@@ -152,6 +152,29 @@ pub const RECIPES: &[Recipe] = &[
         engram_cost: 10,
     },
     Recipe {
+        output: ItemId::PteranodonSaddle,
+        count: 1,
+        inputs: &[(ItemId::Hide, 25), (ItemId::Thatch, 20), (ItemId::Wood, 15)],
+        secs: 7.0,
+        station: BENCH,
+        level: 12,
+        engram_cost: 12,
+    },
+    Recipe {
+        output: ItemId::ArgentavisSaddle,
+        count: 1,
+        inputs: &[
+            (ItemId::Hide, 40),
+            (ItemId::Thatch, 25),
+            (ItemId::Wood, 20),
+            (ItemId::MetalIngot, 4),
+        ],
+        secs: 9.0,
+        station: BENCH,
+        level: 16,
+        engram_cost: 16,
+    },
+    Recipe {
         output: ItemId::Forge,
         count: 1,
         inputs: &[

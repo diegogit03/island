@@ -169,8 +169,23 @@ pub struct Scene<'a> {
 fn saddle_height(species: Species) -> f32 {
     match species {
         Species::Raptor => 16.0,
+        Species::Pteranodon => 20.0,
+        Species::Argentavis => 24.0,
         _ => 10.0,
     }
+}
+
+/// Quanto um voador no ar sobe na tela (em pixels de mundo).
+const FLY_HEIGHT: f32 = 56.0;
+
+/// Deslocamento vertical do desenho de uma criatura voando.
+pub fn lift(c: &Creature) -> f32 {
+    c.altitude * FLY_HEIGHT
+}
+
+/// Voadores bem acima do chão são desenhados depois de tudo (por cima das copas).
+fn high_up(c: &Creature) -> bool {
+    c.altitude > 0.5
 }
 
 /// Desenha nós, estruturas, criaturas e jogador ordenados por Y (quem está mais "embaixo" fica na frente).
@@ -218,7 +233,7 @@ pub fn draw_entities(scene: &Scene) {
     list.extend(
         creatures
             .iter()
-            .filter(|c| culled.contains(c.pos))
+            .filter(|c| culled.contains(c.pos) && !high_up(c))
             .map(|c| (c.pos.y, Drawable::Creature(c))),
     );
     // Montado, o personagem é desenhado junto da montaria (logo depois dela).
@@ -230,19 +245,38 @@ pub fn draw_entities(scene: &Scene) {
     );
     list.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+    let mut flyers: Vec<&Creature> = creatures
+        .iter()
+        .filter(|c| culled.contains(c.pos) && high_up(c))
+        .collect();
+    flyers.sort_by(|a, b| a.pos.y.total_cmp(&b.pos.y));
+    // Sombra de quem voa alto fica no chão, embaixo de árvores e construções.
+    for c in &flyers {
+        draw_shadow(c);
+    }
+
+    let draw_with_riders = |c: &Creature| {
+        draw_creature(c, time, !high_up(c));
+        for rider in avatars.iter().filter(|a| a.mount == Some(c.id)) {
+            draw_player(
+                rider.player,
+                rider.held,
+                rider.shirt,
+                saddle_height(c.species) + lift(c),
+            );
+        }
+    };
     for (_, d) in list {
         match d {
             Drawable::Node(n) => draw_node(n, player_pos),
             Drawable::Bag(b) => draw_bag(b, time),
             Drawable::Structure(s) => draw_structure(s, time),
-            Drawable::Creature(c) => {
-                draw_creature(c, time);
-                for rider in avatars.iter().filter(|a| a.mount == Some(c.id)) {
-                    draw_player(rider.player, rider.held, rider.shirt, saddle_height(c.species));
-                }
-            }
+            Drawable::Creature(c) => draw_with_riders(c),
             Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, 0.0),
         }
+    }
+    for c in flyers {
+        draw_with_riders(c);
     }
 
     for stone in scene.projectiles {
@@ -686,10 +720,14 @@ fn draw_pebbles(pos: Vec2, variant: u8) {
 }
 
 /// Nomes dos outros jogadores (espaço de tela, acima da cabeça).
-pub fn draw_names(avatars: &[Avatar], camera: &Camera2D) {
+pub fn draw_names(avatars: &[Avatar], creatures: &[Creature], camera: &Camera2D) {
     for a in avatars {
         let Some(name) = a.name else { continue };
-        let lift = if a.mount.is_some() { 58.0 } else { 42.0 };
+        let mount = a.mount.and_then(|id| creatures.iter().find(|c| c.id == id));
+        let lift = match mount {
+            Some(c) => 42.0 + saddle_height(c.species) + lift(c),
+            None => 42.0,
+        };
         let at = camera.world_to_screen(a.player.pos - vec2(0.0, lift));
         let w = measure_text(name, None, 18, 1.0).width;
         draw_rectangle(
@@ -854,13 +892,23 @@ fn hurt_tint(c: Color, hurt: f32) -> Color {
     Color::new(c.r + (1.0 - c.r) * t, c.g * (1.0 - t), c.b * (1.0 - t), c.a)
 }
 
-fn draw_creature(c: &Creature, time: f32) {
+/// Sombra no chão, menor quanto mais alto.
+fn draw_shadow(c: &Creature) {
+    let k = 1.0 - c.altitude * 0.35;
+    let r = c.species.radius() * if c.species.flies() { 1.6 } else { 1.0 };
+    draw_ellipse(c.pos.x, c.pos.y, (r + 3.0) * k, 4.0 * k, 0.0, SHADOW);
+}
+
+/// `shadow`: desenhar a sombra junto (voadores bem no alto já tiveram a sombra desenhada antes).
+fn draw_creature(c: &Creature, time: f32, shadow: bool) {
     let s = if c.facing_left { -1.0 } else { 1.0 };
     let lunge = (c.lunge / 0.25) * 6.0 * s;
-    let pos = c.pos + vec2(lunge, 0.0);
     let step = if c.moving { (c.anim_time * 9.0).sin() } else { 0.0 };
     let r = c.species.radius();
-    draw_ellipse(pos.x, pos.y, r + 3.0, 4.0, 0.0, SHADOW);
+    if shadow {
+        draw_shadow(c);
+    }
+    let pos = c.pos + vec2(lunge, -lift(c));
     if !c.is_alive() || c.knocked_out {
         draw_lying(c.species, pos, s, c.knocked_out);
         if c.knocked_out {
@@ -877,10 +925,15 @@ fn draw_creature(c: &Creature, time: f32) {
     }
     if c.is_tamed() {
         // Marcador de domesticado: losango verde acima da cabeça.
-        let top = vec2(pos.x, pos.y - r * 2.8 - 2.0);
+        let top = vec2(pos.x, pos.y - r * 2.8 - 2.0 - if c.flying { 8.0 } else { 0.0 });
         draw_poly(top.x, top.y, 4, 3.0, 45.0, Color::new(0.4, 0.95, 0.5, 0.9));
     }
     let tint = |col| hurt_tint(col, c.hurt);
+    // Batida de asa: rápida subindo/descendo, devagar planando parado no ar.
+    let flap = (c.altitude > 0.05).then(|| {
+        let speed = if c.moving { 9.0 } else { 5.0 };
+        ((time + c.id as f32 * 0.37) * speed).sin() * c.altitude.min(1.0)
+    });
     match c.species {
         Species::Dodo => draw_dodo(pos, s, step, &tint),
         Species::Trilobite => draw_trilobite(pos, step, &tint),
@@ -902,18 +955,142 @@ fn draw_creature(c: &Creature, time: f32) {
             tint(Color::from_rgba(176, 110, 60, 255)),
             tint(Color::from_rgba(110, 64, 34, 255)),
         ),
+        Species::Pteranodon => draw_pteranodon(pos, s, step, flap, &tint),
+        Species::Argentavis => draw_argentavis(pos, s, step, flap, &tint),
     }
     if c.can_ride() {
-        let k = 1.1;
+        let seat = saddle_height(c.species);
         let (x, y) = (pos.x, pos.y);
-        draw_rectangle(
-            x - 6.0 * k,
-            y - 21.0 * k,
-            12.0 * k,
-            5.0 * k,
-            Color::from_rgba(96, 60, 32, 255),
-        );
-        draw_line(x, y - 16.0 * k, x, y - 10.0 * k, 1.5, Color::from_rgba(70, 44, 24, 255));
+        let leather = match c.species {
+            Species::Pteranodon => Color::from_rgba(88, 70, 56, 255),
+            _ => Color::from_rgba(96, 60, 32, 255),
+        };
+        let w = if c.species == Species::Argentavis { 16.0 } else { 13.0 };
+        draw_rectangle(x - w / 2.0, y - seat - 5.0, w, 5.5, leather);
+        draw_line(x, y - seat, x, y - seat + 6.0, 1.5, Color::from_rgba(70, 44, 24, 255));
+    }
+}
+
+/// Asa vista de lado (3/4): quadrilátero do ombro até a ponta, que sobe na tela (`rise` > 0) ou desce.
+/// `chord`: largura junto ao corpo; `sweep`: quanto a ponta vai para trás. Retorna a ponta de trás.
+fn draw_wing(shoulder: Vec2, chord: f32, rise: f32, sweep: f32, s: f32, color: Color) -> Vec2 {
+    let front = shoulder + vec2(chord * 0.5 * s, 0.0);
+    let back = shoulder - vec2(chord * 0.5 * s, 0.0);
+    let tip_back = shoulder + vec2(-(sweep + chord * 0.5) * s, -rise);
+    let tip_front = shoulder + vec2((chord * 0.15 - sweep) * s, -rise * 1.08);
+    draw_triangle(front, back, tip_back, color);
+    draw_triangle(front, tip_back, tip_front, color);
+    tip_back
+}
+
+/// Pteranodonte: corpo pequeno, bico comprido, crista para trás e asas de membrana.
+/// `flap`: posição da batida de asa (-1 a 1) quando no ar; `None` = pousado sobre as asas dobradas.
+fn draw_pteranodon(pos: Vec2, s: f32, step: f32, flap: Option<f32>, tint: &dyn Fn(Color) -> Color) {
+    const K: f32 = 1.35;
+    let (x, y) = (pos.x, pos.y);
+    let body = tint(Color::from_rgba(132, 116, 102, 255));
+    let wing = tint(Color::from_rgba(158, 102, 80, 255));
+    let wing_far = tint(Color::from_rgba(116, 74, 60, 255));
+    let crest = tint(Color::from_rgba(200, 84, 52, 255));
+    let beak = tint(Color::from_rgba(222, 198, 142, 255));
+    let yb = y - if flap.is_some() { 14.0 } else { 12.0 } * K;
+    // Ponto relativo ao centro do corpo, já virado para o lado certo e na escala da espécie.
+    let at = |dx: f32, dy: f32| vec2(x + dx * K * s, yb + dy * K);
+    let shoulder = at(-1.0, -1.0);
+    match flap {
+        // Asa de trás sobe na tela e a da frente desce (vista 3/4); `f` bate as duas juntas.
+        Some(f) => {
+            draw_wing(shoulder, 12.0 * K, (20.0 + 10.0 * f) * K, 6.0 * K, s, wing_far);
+            draw_line(
+                at(-5.0, 1.0).x,
+                at(-5.0, 1.0).y,
+                at(-10.0, 3.0).x,
+                at(-10.0, 3.0).y,
+                1.5,
+                body,
+            );
+        }
+        None => {
+            // De pé sobre os "punhos" das asas.
+            let (hand, foot) = (at(4.0, 0.0), vec2(x + (7.0 + step * 2.0) * K * s, y));
+            draw_line(hand.x, hand.y, foot.x, foot.y, 2.5, wing_far);
+            let (hip, back_foot) = (at(-4.0, 2.0), vec2(x - (4.0 + step * 2.0) * K * s, y));
+            draw_line(hip.x, hip.y, back_foot.x, back_foot.y, 2.0, body);
+        }
+    }
+    draw_ellipse(x, yb, 9.0 * K, 4.5 * K, 0.0, body);
+    let (neck_top, head) = match flap {
+        Some(_) => (at(10.0, -4.0), at(11.0, -5.0)),
+        None => (at(9.0, -10.0), at(10.0, -11.0)),
+    };
+    let neck = at(6.0, -1.0);
+    draw_line(neck.x, neck.y, neck_top.x, neck_top.y, 3.0 * K, body);
+    let rel = |dx: f32, dy: f32| head + vec2(dx * K * s, dy * K);
+    draw_triangle(rel(1.0, -1.0), rel(-1.0, -2.5), rel(-10.0, -8.0), crest);
+    draw_circle(head.x, head.y, 3.5 * K, body);
+    draw_triangle(rel(2.0, -1.5), rel(2.0, 1.5), rel(15.0, 1.0), beak);
+    let eye = rel(1.0, -0.5);
+    draw_circle(eye.x, eye.y, 1.2, BLACK);
+    match flap {
+        Some(f) => {
+            draw_wing(shoulder, 12.0 * K, (-14.0 + 22.0 * f) * K, 6.0 * K, s, wing);
+        }
+        None => draw_triangle(at(5.0, -2.0), at(-6.0, -1.0), at(6.0, 6.0), wing),
+    }
+}
+
+/// Argentavis: ave enorme, escura, de cabeça pelada, colar branco e bico em gancho.
+fn draw_argentavis(pos: Vec2, s: f32, step: f32, flap: Option<f32>, tint: &dyn Fn(Color) -> Color) {
+    const K: f32 = 1.15;
+    let (x, y) = (pos.x, pos.y);
+    let body = tint(Color::from_rgba(78, 60, 48, 255));
+    let wing = tint(Color::from_rgba(64, 48, 38, 255));
+    let wing_far = tint(Color::from_rgba(46, 34, 28, 255));
+    let tips = tint(Color::from_rgba(32, 24, 20, 255));
+    let ruff = tint(Color::from_rgba(228, 222, 208, 255));
+    let skin = tint(Color::from_rgba(206, 150, 122, 255));
+    let beak = tint(Color::from_rgba(228, 196, 108, 255));
+    let yb = y - 16.0 * K;
+    let at = |dx: f32, dy: f32| vec2(x + dx * K * s, yb + dy * K);
+    // Penas compridas ("dedos") na ponta da asa.
+    let fingers = |tip: Vec2, color: Color| {
+        for i in 0..3 {
+            let end = tip + vec2((-3.0 - i as f32 * 3.0) * K * s, (4.0 + i as f32 * 2.0) * K);
+            draw_line(tip.x, tip.y, end.x, end.y, 2.0, color);
+        }
+    };
+    let head = |center: Vec2| {
+        let rel = |dx: f32, dy: f32| center + vec2(dx * K * s, dy * K);
+        let neck = rel(-4.0, 2.0);
+        draw_circle(neck.x, neck.y, 5.0 * K, ruff);
+        draw_circle(center.x, center.y, 4.2 * K, skin);
+        draw_triangle(rel(3.0, -2.0), rel(3.0, 2.0), rel(8.0, 3.0), beak);
+        let eye = rel(1.0, -1.0);
+        draw_circle(eye.x, eye.y, 1.2, BLACK);
+    };
+    match flap {
+        Some(f) => {
+            let shoulder = at(-1.0, -2.0);
+            let far_tip = draw_wing(shoulder, 16.0 * K, (26.0 + 10.0 * f) * K, 6.0 * K, s, wing_far);
+            fingers(far_tip, tips);
+            draw_triangle(at(-10.0, -2.0), at(-10.0, 3.0), at(-21.0, 1.0), wing);
+            draw_ellipse(x, yb, 12.0 * K, 6.0 * K, 0.0, body);
+            head(at(13.0, -5.0));
+            let near_tip = draw_wing(shoulder, 16.0 * K, (-16.0 + 26.0 * f) * K, 6.0 * K, s, wing);
+            fingers(near_tip, tips);
+        }
+        None => {
+            let legs = tint(Color::from_rgba(200, 170, 90, 255));
+            for (side, swing) in [(-3.0, step), (3.0, -step)] {
+                let (hip, foot) = (vec2(x + side * K, y - 8.0 * K), vec2(x + (side + swing * 2.0) * K, y));
+                draw_line(hip.x, hip.y, foot.x, foot.y, 2.5, legs);
+            }
+            draw_triangle(at(-8.0, -4.0), at(-6.0, 6.0), at(-18.0, 8.0), wing_far);
+            draw_ellipse(x, yb, 11.0 * K, 9.0 * K, 0.0, body);
+            let folded = at(-2.0, 1.0);
+            draw_ellipse(folded.x, folded.y, 9.0 * K, 6.5 * K, 0.0, wing);
+            head(at(9.0, -12.0));
+        }
     }
 }
 
@@ -1013,6 +1190,8 @@ fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
         Species::Trilobite => Color::from_rgba(80, 96, 116, 255),
         Species::Dilophosaur => Color::from_rgba(74, 110, 58, 255),
         Species::Raptor => Color::from_rgba(140, 90, 52, 255),
+        Species::Pteranodon => Color::from_rgba(112, 98, 88, 255),
+        Species::Argentavis => Color::from_rgba(62, 48, 40, 255),
     };
     let r = species.radius();
     draw_ellipse(x, y - 4.0, r + 2.0, r * 0.45, 0.0, col);
@@ -1040,8 +1219,8 @@ pub fn draw_creature_bars(creatures: &[Creature], camera: &Camera2D, skip: Optio
         if !hurt && !dazed && !chasing && !c.is_tamed() {
             continue;
         }
-        let lift = if c.knocked_out { 1.4 } else { 2.8 };
-        let top = c.pos - vec2(0.0, c.species.radius() * lift + 10.0);
+        let height = if c.knocked_out { 1.4 } else { 2.8 };
+        let top = c.pos - vec2(0.0, c.species.radius() * height + 10.0 + lift(c));
         let at = camera.world_to_screen(top);
         let (w, h) = (44.0, 5.0);
         draw_rectangle(at.x - w / 2.0, at.y, w, h, Color::new(0.0, 0.0, 0.0, 0.6));

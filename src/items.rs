@@ -26,6 +26,8 @@ pub enum ItemId {
     Slingshot,
     Narcotic,
     RaptorSaddle,
+    PteranodonSaddle,
+    ArgentavisSaddle,
     Campfire,
     Forge,
     Workbench,
@@ -51,7 +53,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 27] = [
+    pub const ALL: [ItemId; 29] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -72,6 +74,8 @@ impl ItemId {
         ItemId::Slingshot,
         ItemId::Narcotic,
         ItemId::RaptorSaddle,
+        ItemId::PteranodonSaddle,
+        ItemId::ArgentavisSaddle,
         ItemId::Campfire,
         ItemId::Forge,
         ItemId::Workbench,
@@ -104,6 +108,8 @@ impl ItemId {
             ItemId::Slingshot => "Estilingue",
             ItemId::Narcotic => "Narcótico",
             ItemId::RaptorSaddle => "Sela de Raptor",
+            ItemId::PteranodonSaddle => "Sela de Pteranodonte",
+            ItemId::ArgentavisSaddle => "Sela de Argentavis",
             ItemId::Campfire => "Fogueira",
             ItemId::Workbench => "Bancada",
             ItemId::StorageBox => "Caixa de Armazenamento",
@@ -125,7 +131,7 @@ impl ItemId {
             | ItemId::MetalIngot => 100,
             ItemId::RawMeat | ItemId::CookedMeat => 40,
             ItemId::Narcotic => 50,
-            ItemId::RaptorSaddle => 1,
+            ItemId::RaptorSaddle | ItemId::PteranodonSaddle | ItemId::ArgentavisSaddle => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
             ItemId::StonePickaxe
@@ -136,6 +142,28 @@ impl ItemId {
             | ItemId::MetalSword
             | ItemId::WoodenClub
             | ItemId::Slingshot => 1,
+        }
+    }
+
+    /// Peso de uma unidade (conta para a carga dos dinos).
+    pub fn weight(self) -> f32 {
+        match self {
+            ItemId::Thatch | ItemId::Flint | ItemId::Berry | ItemId::Narcotic => 0.1,
+            ItemId::RawMeat | ItemId::CookedMeat | ItemId::Hide => 0.2,
+            ItemId::Wood => 0.5,
+            ItemId::Stone | ItemId::MetalOre | ItemId::MetalIngot => 1.0,
+            ItemId::WoodenSpear | ItemId::WoodenClub | ItemId::Slingshot => 1.0,
+            ItemId::StonePickaxe | ItemId::StoneHatchet => 1.5,
+            ItemId::MetalPickaxe | ItemId::MetalHatchet | ItemId::MetalSword => 2.5,
+            ItemId::RaptorSaddle => 6.0,
+            ItemId::PteranodonSaddle => 5.0,
+            ItemId::ArgentavisSaddle => 10.0,
+            ItemId::WoodWall | ItemId::WoodDoor => 3.0,
+            ItemId::WoodFoundation => 4.0,
+            ItemId::Campfire => 5.0,
+            ItemId::StorageBox => 8.0,
+            ItemId::Workbench => 12.0,
+            ItemId::Forge => 25.0,
         }
     }
 
