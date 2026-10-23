@@ -76,9 +76,15 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - **Mamute** (territorial: revida quando atacado); montado, derruba árvores e enche a carga de madeira
   - **Smilodon** (agressivo); montado, tira muito couro das carcaças
   - **Lobo-cinzento** (agressivo, anda em alcateia de até 3)
+- ✅ Bioma de pântano no leste da ilha (lama, juncos, lagoas com vitórias-régias, árvores com musgo):
+  - **Beelzebufo** (passivo); montado, Espaço pula por cima de árvores e água
+  - **Sarcosuchus** (agressivo); montável, mais rápido nadando
+  - **Titanoboa** (agressiva, domesticável, não montável)
+  - **Piranhas** em cardume nas lagoas (não domesticáveis): cuidado ao entrar na água
+  - Anfíbios andam na lama e nadam nas lagoas (e na água rasa do mar); bichos de terra não entram
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
 - Áudio (macroquad já suporta), menus, opções, rebind de teclas
-- Biomas de selva e pântano, cavernas
+- Bioma de selva, cavernas
 - Frio no bioma de gelo (roupas de pele, fogueira esquenta) e domesticados que lutam junto com o dono
 - Mapa/minimapa, notas exploráveis, chefes simples
 

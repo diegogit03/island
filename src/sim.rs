@@ -24,7 +24,7 @@ use crate::rng::Rng;
 use crate::save::{BagSave, LEGACY_PLAYER, PlayerSave, SaveData};
 use crate::slots;
 use crate::vitals::{self, Vitals};
-use crate::world::{BagKind, GroundBag, NodeKind, Tile, World};
+use crate::world::{BagKind, GroundBag, NodeKind, TILE, Tile, World};
 
 pub const MAP_SIZE: usize = 160;
 pub const PICKUP_REACH: f32 = 28.0;
@@ -886,13 +886,19 @@ impl Sim {
         }
     }
 
-    /// Espaço montado num voador: decola ou pousa.
-    fn toggle_flight(&mut self, pi: usize) {
+    /// Espaço montado: voador decola ou pousa; beelzebufo pula.
+    fn mount_action(&mut self, pi: usize) {
         let Some(id) = self.players[pi].mount else { return };
         let world = &self.world;
         let Some(mount) = self.creatures.iter_mut().find(|c| c.id == id) else {
             return;
         };
+        if mount.species.leaps() {
+            if !mount.start_leap() && mount.overweight() {
+                self.notify(pi, "Carga pesada demais para pular".to_owned());
+            }
+            return;
+        }
         if !mount.species.flies() {
             return;
         }
@@ -1026,7 +1032,7 @@ impl Sim {
             p.pos + vec2(0.0, -16.0),
         ]
         .iter()
-        .any(|&q| matches!(self.world.tile_at(q), Tile::ShallowWater | Tile::DeepWater))
+        .any(|&q| self.world.tile_at(q).is_water())
     }
 
     fn swing(&mut self, pi: usize) {
@@ -1473,7 +1479,7 @@ impl Sim {
                     }
                 }
             }
-            Command::ToggleFlight => self.toggle_flight(pi),
+            Command::MountAction => self.mount_action(pi),
             Command::Mount => {
                 if let Some(ContainerRef::Creature(id)) = self.players[pi].container {
                     self.close_container(pi);
@@ -1704,6 +1710,10 @@ impl Sim {
             vec2(-60.0, -90.0),
             vec2(30.0, 130.0),
             vec2(-150.0, 110.0),
+            vec2(90.0, -100.0),
+            vec2(-190.0, 30.0),
+            vec2(190.0, -40.0),
+            vec2(-20.0, 170.0),
         ];
         for (species, offset) in Species::ALL.into_iter().zip(offsets) {
             let mut c = Creature::new(species, base + offset);
@@ -1713,7 +1723,7 @@ impl Sim {
         let mut corpse = Creature::new(Species::Dodo, base + vec2(40.0, -50.0));
         corpse.take_hit(999.0, 0.0, base);
         self.add_creature(corpse);
-        let dilo = self.creatures.len() - 8;
+        let dilo = self.creatures.len() - 12;
         self.creatures[dilo].take_hit(30.0, 20.0, base);
     }
 
@@ -1782,6 +1792,50 @@ impl Sim {
             self.add_creature(c);
         }
         self.mount_creature(0, mammoth);
+    }
+
+    /// Primeiro jogador no pântano montado num sarcosuchus dentro de uma lagoa, com piranhas em volta,
+    /// um beelzebufo e uma titanoboa domesticados na lama.
+    pub fn demo_swamp(&mut self) {
+        let world = &self.world;
+        let mud_near = |p: Vec2| {
+            world
+                .find_near(p, |q| world.tile_at(q) == Tile::Swamp)
+                .is_some_and(|m| m.distance(p) < 90.0)
+        };
+        let Some(spot) = (0..world.width as i32 * world.height as i32)
+            .map(|i| {
+                let (x, y) = (i % world.width as i32, i / world.width as i32);
+                vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE)
+            })
+            .filter(|&p| world.tile_at(p) == Tile::SwampWater && Species::Sarcosuchus.can_stand(world, p))
+            .find(|&p| {
+                let fish = [vec2(60.0, -30.0), vec2(80.0, 10.0)];
+                mud_near(p) && fish.iter().all(|&o| world.tile_at(p + o) == Tile::SwampWater)
+            })
+        else {
+            return;
+        };
+        self.creatures.clear();
+        self.players[0].player.pos = spot;
+        let sarco = self.demo_tamed(Species::Sarcosuchus, spot, 16);
+        let place = |sim: &Sim, species: Species, offset: Vec2| {
+            sim.world.find_near(spot + offset, |p| species.can_stand(&sim.world, p))
+        };
+        if let Some(at) = place(self, Species::Beelzebufo, vec2(-60.0, 60.0)) {
+            self.demo_tamed(Species::Beelzebufo, at, 9);
+        }
+        if let Some(at) = place(self, Species::Titanoboa, vec2(-130.0, -10.0)) {
+            self.demo_tamed(Species::Titanoboa, at, 12);
+        }
+        for offset in [vec2(60.0, -30.0), vec2(80.0, 10.0), vec2(95.0, -15.0), vec2(70.0, 30.0)] {
+            if let Some(at) = place(self, Species::Piranha, offset) {
+                let mut fish = Creature::new(Species::Piranha, at).with_level(4);
+                fish.facing_left = true;
+                self.add_creature(fish);
+            }
+        }
+        self.mount_creature(0, sarco);
     }
 
     /// Painel de carga de um argentavis domesticado.
@@ -2037,7 +2091,7 @@ mod tests {
     fn flying_mount_crosses_the_sea_and_lands_on_the_way_out() {
         let (mut sim, ids) = sim_with(&["Ana"]);
         let id = mount_flyer(&mut sim, Species::Pteranodon);
-        sim.command(ids[0], Command::ToggleFlight);
+        sim.command(ids[0], Command::MountAction);
         assert!(sim.creature(id).unwrap().flying);
         // Voa do centro da ilha para fora (o spawn é na praia) até estar sobre o mar aberto.
         let out = (sim.players[0].player.pos - sim.world.size_px() / 2.0).normalize();
@@ -2059,7 +2113,7 @@ mod tests {
 
         // F e Espaço não descem nem pousam na água.
         sim.command(ids[0], Command::Interact);
-        sim.command(ids[0], Command::ToggleFlight);
+        sim.command(ids[0], Command::MountAction);
         assert_eq!(sim.players[0].mount, Some(id));
         assert!(sim.creature(id).unwrap().flying);
 
@@ -2076,7 +2130,7 @@ mod tests {
     fn ground_predators_ignore_riders_in_the_air() {
         let (mut sim, ids) = sim_with(&["Ana"]);
         let id = mount_flyer(&mut sim, Species::Pteranodon);
-        sim.command(ids[0], Command::ToggleFlight);
+        sim.command(ids[0], Command::MountAction);
         let pos = sim.players[0].player.pos;
         let raptor = sim.add_creature(Creature::new(Species::Raptor, pos + vec2(20.0, 0.0)));
         for _ in 0..120 {
@@ -2089,6 +2143,32 @@ mod tests {
         wild.flying = true;
         let p = Player::new(pos);
         assert_eq!(find_target(&sim.world, &[wild], &p, None), None);
+    }
+
+    #[test]
+    fn piranhas_bite_whoever_wades_into_the_pond() {
+        let (mut sim, _) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        let world = &sim.world;
+        let pond = (0..world.width as i32 * world.height as i32)
+            .map(|i| {
+                let (x, y) = (i % world.width as i32, i / world.width as i32);
+                vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE)
+            })
+            .find(|&p| {
+                [vec2(0.0, 0.0), vec2(20.0, 0.0)]
+                    .iter()
+                    .all(|&o| Species::Piranha.can_stand(world, p + o) && !world.blocked(p + o, player::RADIUS))
+            })
+            .expect("lagoa com espaço");
+        sim.players[0].player.pos = pond;
+        sim.add_creature(Creature::new(Species::Piranha, pond + vec2(20.0, 0.0)));
+        let health = sim.players[0].vitals.health;
+        for _ in 0..120 {
+            sim.tick(1.0 / 60.0);
+        }
+        assert!(sim.players[0].vitals.health < health, "piranha mordeu");
+        assert!(sim.near_water(0), "dá para beber na lagoa");
     }
 
     #[test]
@@ -2161,7 +2241,7 @@ mod tests {
         }
         assert!(argy.overweight());
         assert!(argy.ride_speed(RIDE_MULT, 1.0) < light, "fica lento");
-        sim.command(ids[0], Command::ToggleFlight);
+        sim.command(ids[0], Command::MountAction);
         assert!(!sim.creature(id).unwrap().flying);
     }
 

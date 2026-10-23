@@ -466,7 +466,7 @@ impl Client {
                 self.send(Command::Interact);
             }
             if mounted && is_key_pressed(KeyCode::Space) {
-                self.send(Command::ToggleFlight);
+                self.send(Command::MountAction);
             }
         }
     }

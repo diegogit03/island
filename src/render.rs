@@ -18,6 +18,8 @@ const SAND: Color = Color::new(0.89, 0.80, 0.59, 1.0);
 const GRASS: Color = Color::new(0.38, 0.63, 0.28, 1.0);
 const MOUNTAIN: Color = Color::new(0.55, 0.52, 0.48, 1.0);
 const SNOW: Color = Color::new(0.92, 0.94, 0.97, 1.0);
+const SWAMP: Color = Color::new(0.36, 0.42, 0.25, 1.0);
+const SWAMP_WATER: Color = Color::new(0.25, 0.35, 0.28, 1.0);
 const SHADOW: Color = Color::new(0.0, 0.0, 0.0, 0.22);
 
 fn shade(c: Color, f: f32) -> Color {
@@ -46,6 +48,11 @@ pub fn draw_ground(world: &World, view: Rect, time: f32) {
                 Tile::Grass => shade(GRASS, variation),
                 Tile::Mountain => shade(MOUNTAIN, 0.92 + h * 0.14),
                 Tile::Snow => shade(SNOW, 0.97 + h * 0.04),
+                Tile::Swamp => shade(SWAMP, variation),
+                Tile::SwampWater => shade(
+                    SWAMP_WATER,
+                    1.0 + (time * 1.2 + x as f32 * 0.6 + y as f32 * 0.4).sin() * 0.03,
+                ),
             };
             draw_rectangle(px, py, TILE + 0.5, TILE + 0.5, color);
 
@@ -62,6 +69,40 @@ pub fn draw_ground(world: &World, view: Rect, time: f32) {
                     draw_circle(px + 4.0 + h * 22.0, py + 6.0 + (h * 41.0) % 20.0, 1.6, c);
                     let (cx, cy) = (px + (h * 67.0) % 26.0 + 3.0, py + (h * 29.0) % 24.0 + 4.0);
                     draw_line(cx, cy, cx + 5.0, cy + 3.0, 1.0, c);
+                }
+                Tile::Swamp if h > 0.55 => {
+                    // Juncos com ponta marrom e uma poça de lama.
+                    let (rx, ry) = (px + 4.0 + h * 22.0, py + 14.0 + (h * 37.0) % 14.0);
+                    let reed = shade(SWAMP, 0.7);
+                    for (dx, hgt) in [(0.0, 9.0), (3.0, 12.0), (6.0, 8.0)] {
+                        draw_line(rx + dx, ry, rx + dx - 1.0, ry - hgt, 1.5, reed);
+                    }
+                    draw_rectangle(rx + 1.5, ry - 13.0, 2.0, 4.0, Color::from_rgba(110, 76, 44, 255));
+                    if h > 0.8 {
+                        let mud = Color::from_rgba(78, 70, 46, 255);
+                        draw_ellipse(
+                            px + (h * 59.0) % 20.0 + 6.0,
+                            py + (h * 23.0) % 20.0 + 6.0,
+                            5.0,
+                            2.5,
+                            0.0,
+                            mud,
+                        );
+                    }
+                }
+                Tile::SwampWater if h > 0.62 => {
+                    // Vitória-régia.
+                    let (lx, ly) = (px + 6.0 + h * 18.0, py + 6.0 + (h * 47.0) % 18.0);
+                    draw_ellipse(lx, ly, 5.5, 3.2, 0.0, Color::from_rgba(76, 128, 58, 255));
+                    draw_triangle(
+                        vec2(lx, ly),
+                        vec2(lx + 5.5, ly - 1.0),
+                        vec2(lx + 5.5, ly + 1.0),
+                        shade(SWAMP_WATER, 1.0),
+                    );
+                    if h > 0.9 {
+                        draw_circle(lx - 1.0, ly - 1.0, 1.4, Color::from_rgba(236, 190, 210, 255));
+                    }
                 }
                 Tile::Snow if h > 0.55 => {
                     // Montinhos de neve azulados e um brilho.
@@ -183,6 +224,8 @@ fn saddle_height(species: Species) -> f32 {
         Species::Argentavis => 24.0,
         Species::Mammoth => 36.0,
         Species::Smilodon => 19.0,
+        Species::Beelzebufo => 18.0,
+        Species::Sarcosuchus => 13.0,
         _ => 10.0,
     }
 }
@@ -268,7 +311,13 @@ pub fn draw_entities(scene: &Scene) {
     }
 
     let draw_with_riders = |c: &Creature| {
-        draw_creature(c, time, !high_up(c));
+        // Nadando (no chão de uma lagoa ou água rasa): parte de baixo coberta pela água.
+        let water = match world.tile_at(c.pos) {
+            Tile::ShallowWater if c.altitude < 0.1 => Some(SHALLOW_WATER),
+            Tile::SwampWater if c.altitude < 0.1 => Some(SWAMP_WATER),
+            _ => None,
+        };
+        draw_creature(c, time, !high_up(c) && water.is_none(), water);
         for rider in avatars.iter().filter(|a| a.mount == Some(c.id)) {
             draw_player(
                 rider.player,
@@ -280,7 +329,7 @@ pub fn draw_entities(scene: &Scene) {
     };
     for (_, d) in list {
         match d {
-            Drawable::Node(n) => draw_node(n, player_pos, world.tile_at(n.pos) == Tile::Snow),
+            Drawable::Node(n) => draw_node(n, player_pos, world.tile_at(n.pos)),
             Drawable::Bag(b) => draw_bag(b, time),
             Drawable::Structure(s) => draw_structure(s, time),
             Drawable::Creature(c) => draw_with_riders(c),
@@ -298,8 +347,8 @@ pub fn draw_entities(scene: &Scene) {
     }
 }
 
-/// `snowy`: no bioma de gelo (árvores viram pinheiros nevados).
-fn draw_node(node: &ResourceNode, player_pos: Vec2, snowy: bool) {
+/// `ground`: tile embaixo do nó (no gelo, árvores viram pinheiros nevados; no pântano, árvores com musgo).
+fn draw_node(node: &ResourceNode, player_pos: Vec2, ground: Tile) {
     let shake = if node.shake > 0.0 {
         (node.shake * 60.0).sin() * 2.0
     } else {
@@ -312,7 +361,7 @@ fn draw_node(node: &ResourceNode, player_pos: Vec2, snowy: bool) {
             let behind = player_pos.y < node.pos.y
                 && player_pos.y > node.pos.y - 70.0
                 && (player_pos.x - node.pos.x).abs() < 26.0;
-            draw_tree(pos, node.variant, if behind { 0.45 } else { 1.0 }, snowy);
+            draw_tree(pos, node.variant, if behind { 0.45 } else { 1.0 }, ground);
         }
         (NodeKind::Tree, false) => {
             draw_ellipse(pos.x, pos.y, 9.0, 4.0, 0.0, SHADOW);
@@ -327,14 +376,24 @@ fn draw_node(node: &ResourceNode, player_pos: Vec2, snowy: bool) {
     }
 }
 
-fn draw_tree(pos: Vec2, variant: u8, alpha: f32, snowy: bool) {
+fn draw_tree(pos: Vec2, variant: u8, alpha: f32, ground: Tile) {
     let (x, y) = (pos.x, pos.y);
     draw_ellipse(x, y, 16.0, 6.0, 0.0, SHADOW);
     draw_rectangle(x - 4.0, y - 26.0, 8.0, 26.0, Color::from_rgba(110, 72, 40, 255));
     draw_rectangle(x - 4.0, y - 26.0, 3.0, 26.0, Color::from_rgba(132, 90, 52, 255));
 
     let leaf = |r, g, b| Color::from_rgba(r, g, b, 255).with_alpha(alpha);
-    if snowy {
+    if ground == Tile::Swamp {
+        // Árvore do pântano: copa larga e baixa, com barba-de-velho pendurada.
+        draw_ellipse(x, y - 34.0, 24.0, 12.0, 0.0, leaf(52, 74, 40));
+        draw_ellipse(x - 4.0, y - 41.0, 18.0, 9.0, 0.0, leaf(72, 96, 52));
+        let moss = leaf(150, 158, 118);
+        for i in 0..5 {
+            let mx = x - 18.0 + i as f32 * 9.0 + variant as f32;
+            let len = 8.0 + ((i * 7 + variant as usize) % 5) as f32 * 2.5;
+            draw_line(mx, y - 28.0, mx + 1.0, y - 28.0 + len, 1.5, moss);
+        }
+    } else if ground == Tile::Snow {
         // Pinheiro com neve nos galhos
         for (i, w) in [22.0, 17.0, 12.0].into_iter().enumerate() {
             let base = y - 18.0 - i as f32 * 13.0;
@@ -932,7 +991,8 @@ fn draw_shadow(c: &Creature) {
 }
 
 /// `shadow`: desenhar a sombra junto (voadores bem no alto já tiveram a sombra desenhada antes).
-fn draw_creature(c: &Creature, time: f32, shadow: bool) {
+/// `water`: cor da água em que a criatura está (desenha a linha d'água por cima).
+fn draw_creature(c: &Creature, time: f32, shadow: bool, water: Option<Color>) {
     let s = if c.facing_left { -1.0 } else { 1.0 };
     let lunge = (c.lunge / 0.25) * 6.0 * s;
     let step = if c.moving { (c.anim_time * 9.0).sin() } else { 0.0 };
@@ -992,6 +1052,16 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool) {
         Species::Mammoth => draw_mammoth(pos, s, step, &tint),
         Species::Smilodon => draw_smilodon(pos, s, step, &tint),
         Species::Wolf => draw_wolf(pos, s, step, &tint),
+        Species::Beelzebufo => draw_beelzebufo(pos, s, step, &tint),
+        Species::Sarcosuchus => draw_sarcosuchus(pos, s, step, &tint),
+        Species::Titanoboa => {
+            let wave = if c.moving { c.anim_time } else { time * 0.4 };
+            draw_titanoboa(pos, s, wave, &tint);
+        }
+        Species::Piranha => draw_piranha(pos, s, step, &tint),
+    }
+    if let Some(color) = water {
+        draw_waterline(pos, r, color, time);
     }
     if c.can_ride() {
         let seat = saddle_height(c.species);
@@ -1002,7 +1072,7 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool) {
         };
         let w = match c.species {
             Species::Mammoth => 20.0,
-            Species::Argentavis => 16.0,
+            Species::Argentavis | Species::Sarcosuchus => 16.0,
             _ => 13.0,
         };
         draw_rectangle(x - w / 2.0, y - seat - 5.0, w, 5.5, leather);
@@ -1325,6 +1395,145 @@ fn draw_wolf(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
     draw_circle(x + 12.0 * s, y - 17.0, 1.1, BLACK);
 }
 
+/// Beelzebufo: sapo gigante, achatado, de olhos saltados e pintas.
+fn draw_beelzebufo(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let skin = tint(Color::from_rgba(122, 142, 62, 255));
+    let dark = tint(Color::from_rgba(84, 100, 40, 255));
+    let belly = tint(Color::from_rgba(222, 204, 128, 255));
+    let spot = tint(Color::from_rgba(70, 86, 34, 255));
+    // Pata traseira dobrada
+    draw_ellipse(x - 8.0 * s, y - 6.0, 9.0, 6.0, 0.0, dark);
+    draw_line(x - 13.0 * s, y - 1.0, x - (3.0 - step * 2.0) * s, y, 3.0, dark);
+    draw_ellipse(x, y - 11.0, 15.0, 9.0, 0.0, skin);
+    draw_ellipse(x + 3.0 * s, y - 7.0, 9.0, 4.0, 0.0, belly);
+    for (dx, dy, r) in [
+        (-5.0, -15.0, 2.2),
+        (2.0, -17.0, 1.7),
+        (-10.0, -11.0, 1.6),
+        (-1.0, -12.0, 1.4),
+    ] {
+        draw_circle(x + dx * s, y + dy, r, spot);
+    }
+    draw_line(x + 8.0 * s, y - 8.0, x + (11.0 + step * 2.0) * s, y, 3.0, dark);
+    draw_line(x + 4.0 * s, y - 10.0, x + 15.0 * s, y - 12.0, 1.5, dark);
+    for dx in [6.0, 11.0] {
+        draw_circle(x + dx * s, y - 19.0, 3.4, skin);
+        draw_circle(x + (dx + 0.8) * s, y - 19.5, 1.5, BLACK);
+    }
+}
+
+/// Sarcosuchus: crocodilo enorme, baixo, de focinho comprido e fino e placas nas costas.
+fn draw_sarcosuchus(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let hide = tint(Color::from_rgba(96, 110, 70, 255));
+    let dark = tint(Color::from_rgba(64, 76, 46, 255));
+    let belly = tint(Color::from_rgba(180, 172, 120, 255));
+    draw_legs(x, y, s, 6.0, 3.0, &[(-10.0, step), (7.0, -step)], dark);
+    draw_triangle(
+        vec2(x - 12.0 * s, y - 11.0),
+        vec2(x - 12.0 * s, y - 4.0),
+        vec2(x - 34.0 * s, y - 6.0),
+        hide,
+    );
+    draw_ellipse(x, y - 8.0, 16.0, 5.5, 0.0, hide);
+    draw_ellipse(x, y - 5.0, 12.0, 2.0, 0.0, belly);
+    for i in -3..=2 {
+        let sx = x + i as f32 * 5.0 * s;
+        draw_triangle(
+            vec2(sx - 1.5, y - 12.5),
+            vec2(sx + 1.5, y - 12.5),
+            vec2(sx, y - 16.0),
+            dark,
+        );
+    }
+    draw_legs(x, y, s, 6.0, 3.0, &[(-6.0, -step), (11.0, step)], hide);
+    draw_ellipse(x + 17.0 * s, y - 9.0, 6.0, 4.0, 0.0, hide);
+    draw_triangle(
+        vec2(x + 20.0 * s, y - 11.0),
+        vec2(x + 20.0 * s, y - 6.0),
+        vec2(x + 37.0 * s, y - 8.0),
+        hide,
+    );
+    draw_line(x + 20.0 * s, y - 8.0, x + 36.0 * s, y - 8.0, 1.0, dark);
+    for i in 0..4 {
+        let tx = x + (23.0 + i as f32 * 3.5) * s;
+        draw_line(tx, y - 8.0, tx, y - 6.8, 1.0, WHITE);
+    }
+    draw_circle(x + 16.0 * s, y - 13.0, 2.4, hide);
+    draw_circle(x + 16.5 * s, y - 13.5, 1.1, BLACK);
+}
+
+/// Titanoboa: cobra gigante em zigue-zague, cabeça erguida e língua bifurcada.
+/// `wave`: fase da ondulação do corpo.
+fn draw_titanoboa(pos: Vec2, s: f32, wave: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let scale = tint(Color::from_rgba(78, 106, 54, 255));
+    let dark = tint(Color::from_rgba(46, 64, 32, 255));
+    const SEGMENTS: usize = 20;
+    for i in 0..=SEGMENTS {
+        // Da ponta da cauda (t = 0) até o pescoço (t = 1).
+        let t = i as f32 / SEGMENTS as f32;
+        let dx = -40.0 + t * 54.0;
+        let dy = (t * 10.0 - wave * 3.0).sin() * 4.5 * (1.0 - t * 0.6);
+        let r = 2.0 + (t * std::f32::consts::PI * 0.9).sin() * 5.0;
+        let c = vec2(x + dx * s, y - 6.0 + dy);
+        draw_circle(c.x, c.y, r, scale);
+        if i % 3 == 1 {
+            draw_circle(c.x, c.y - r * 0.35, r * 0.45, dark);
+        }
+    }
+    // Pescoço erguido e cabeça
+    for i in 0..4 {
+        let t = i as f32 / 3.0;
+        draw_circle(x + (14.0 + t * 5.0) * s, y - 7.0 - t * 9.0, 4.2, scale);
+    }
+    draw_ellipse(x + 22.0 * s, y - 17.0, 6.5, 4.0, 0.0, scale);
+    draw_circle(x + 23.5 * s, y - 18.5, 1.2, BLACK);
+    let flick = ((wave * 5.0).sin() > 0.0) as u8 as f32;
+    let (tx, ty) = (x + 28.0 * s, y - 16.0);
+    let tongue = Color::from_rgba(200, 50, 60, 255);
+    draw_line(tx, ty, tx + (3.0 + flick * 3.0) * s, ty, 1.0, tongue);
+    let tip = tx + (3.0 + flick * 3.0) * s;
+    draw_line(tip, ty, tip + 2.0 * s, ty - 1.5, 1.0, tongue);
+    draw_line(tip, ty, tip + 2.0 * s, ty + 1.5, 1.0, tongue);
+}
+
+/// Piranha: peixinho prateado de barriga vermelha (fica metade dentro d'água).
+fn draw_piranha(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y - 5.0);
+    let body = tint(Color::from_rgba(150, 158, 166, 255));
+    let belly = tint(Color::from_rgba(206, 74, 56, 255));
+    let fin = tint(Color::from_rgba(106, 114, 124, 255));
+    let wag = step * 1.5;
+    draw_triangle(
+        vec2(x - 5.0 * s, y),
+        vec2(x - 10.0 * s, y - 4.0 + wag),
+        vec2(x - 10.0 * s, y + 4.0 + wag),
+        fin,
+    );
+    draw_ellipse(x, y, 6.5, 4.0, 0.0, body);
+    draw_ellipse(x + 1.0 * s, y + 2.0, 4.5, 2.0, 0.0, belly);
+    draw_triangle(
+        vec2(x - 2.0 * s, y - 3.0),
+        vec2(x + 2.0 * s, y - 3.0),
+        vec2(x - 1.0 * s, y - 8.0),
+        fin,
+    );
+    draw_circle(x + 3.5 * s, y - 1.0, 1.0, BLACK);
+    draw_line(x + 5.0 * s, y + 1.0, x + 6.5 * s, y + 1.0, 1.0, WHITE);
+}
+
+/// Linha d'água sobre uma criatura nadando: cobre a parte de baixo com a cor da água e marca as ondinhas.
+fn draw_waterline(pos: Vec2, radius: f32, water: Color, time: f32) {
+    let depth = (radius * 0.35).max(4.0);
+    let w = radius * 2.3 + 4.0;
+    draw_ellipse(pos.x, pos.y - depth * 0.3, w, depth * 0.8 + 2.0, 0.0, water);
+    let ripple = 1.0 + (time * 3.0 + pos.x * 0.05).sin() * 0.08;
+    let foam = Color::new(1.0, 1.0, 1.0, 0.35);
+    draw_ellipse_lines(pos.x, pos.y - depth, w * ripple, 3.0, 0.0, 1.2, foam);
+}
+
 /// Criatura deitada: morta (olho em X) ou desmaiada (olho fechado).
 fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
     let (x, y) = (pos.x, pos.y);
@@ -1338,6 +1547,10 @@ fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
         Species::Mammoth => Color::from_rgba(108, 76, 50, 255),
         Species::Smilodon => Color::from_rgba(170, 128, 80, 255),
         Species::Wolf => Color::from_rgba(118, 120, 126, 255),
+        Species::Beelzebufo => Color::from_rgba(110, 128, 56, 255),
+        Species::Sarcosuchus => Color::from_rgba(90, 100, 66, 255),
+        Species::Titanoboa => Color::from_rgba(70, 96, 48, 255),
+        Species::Piranha => Color::from_rgba(140, 146, 152, 255),
     };
     let r = species.radius();
     draw_ellipse(x, y - 4.0, r + 2.0, r * 0.45, 0.0, col);

@@ -30,6 +30,8 @@ pub enum ItemId {
     ArgentavisSaddle,
     MammothSaddle,
     SmilodonSaddle,
+    BeelzebufoSaddle,
+    SarcosuchusSaddle,
     Campfire,
     Forge,
     Workbench,
@@ -55,7 +57,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 31] = [
+    pub const ALL: [ItemId; 33] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -80,6 +82,8 @@ impl ItemId {
         ItemId::ArgentavisSaddle,
         ItemId::MammothSaddle,
         ItemId::SmilodonSaddle,
+        ItemId::BeelzebufoSaddle,
+        ItemId::SarcosuchusSaddle,
         ItemId::Campfire,
         ItemId::Forge,
         ItemId::Workbench,
@@ -116,6 +120,8 @@ impl ItemId {
             ItemId::ArgentavisSaddle => "Sela de Argentavis",
             ItemId::MammothSaddle => "Sela de Mamute",
             ItemId::SmilodonSaddle => "Sela de Smilodon",
+            ItemId::BeelzebufoSaddle => "Sela de Beelzebufo",
+            ItemId::SarcosuchusSaddle => "Sela de Sarcosuchus",
             ItemId::Campfire => "Fogueira",
             ItemId::Workbench => "Bancada",
             ItemId::StorageBox => "Caixa de Armazenamento",
@@ -141,7 +147,9 @@ impl ItemId {
             | ItemId::PteranodonSaddle
             | ItemId::ArgentavisSaddle
             | ItemId::MammothSaddle
-            | ItemId::SmilodonSaddle => 1,
+            | ItemId::SmilodonSaddle
+            | ItemId::BeelzebufoSaddle
+            | ItemId::SarcosuchusSaddle => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
             ItemId::StonePickaxe
@@ -170,6 +178,8 @@ impl ItemId {
             ItemId::ArgentavisSaddle => 10.0,
             ItemId::MammothSaddle => 14.0,
             ItemId::SmilodonSaddle => 6.0,
+            ItemId::BeelzebufoSaddle => 5.0,
+            ItemId::SarcosuchusSaddle => 9.0,
             ItemId::WoodWall | ItemId::WoodDoor => 3.0,
             ItemId::WoodFoundation => 4.0,
             ItemId::Campfire => 5.0,

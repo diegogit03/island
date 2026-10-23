@@ -19,6 +19,7 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Domesticação: derrube dinos com clava ou estilingue, alimente-os desacordados e monte num raptor com sela
 - **Criaturas voadoras**: pteranodonte (o mais rápido) e argentavis (carrega mais peso), montáveis com sela; voe sobre a ilha e o mar
 - Peso de carga dos dinos: carregado demais, o dino fica lento e não decola
+- **Bioma de pântano** no leste: beelzebufo (montado, pula), sarcosuchus (montável, nada rápido) e titanoboa, domesticáveis; lagoas com piranhas
 - **Bioma de gelo** no norte da ilha: mamutes (montados, coletam madeira), smilodons (montados, tiram couro) e lobos-cinzentos em alcateia, todos domesticáveis
 - Criaturas com níveis (1–30)
 - Progressão: XP, nível, pontos de atributo e engramas (receitas desbloqueadas por nível)
@@ -50,7 +51,7 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | Tab / I | Inventário, personagem (atributos) e crafting/engramas |
 | Q / Ctrl+Q | Largar 1 item / a pilha |
 | F | Interagir: pegar itens, abrir porta/baú/fogueira, usar bancada, abrir dino (alimentar/comandar); montado: desmontar |
-| Espaço | Montado num voador: decolar/pousar |
+| Espaço | Montado: voador decola/pousa; beelzebufo pula |
 | F5 | Salvar |
 | H | Mostrar/esconder ajuda |
 | Enter | Chat |

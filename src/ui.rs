@@ -563,6 +563,9 @@ fn draw_mount_bar(mount: &Creature) {
     let (x, w, h) = (16.0, 234.0, 10.0);
     let y = screen_height() - 30.0 - 5.0 * 24.0 - 14.0;
     let mut label = format!("{} Nv {}   F: desmontar", mount.species.name(), mount.level);
+    if mount.species.leaps() {
+        label.push_str("   Espaço: pular");
+    }
     if mount.species.flies() {
         label.push_str(if mount.flying {
             "   Espaço: pousar"
@@ -587,6 +590,7 @@ fn mount_hint(mount: &Creature) -> &'static str {
     match (mount.species.mount_harvest(), mount.species.attack()) {
         (Some(MountHarvest::Wood), _) => "montado: E / clique morde ou derruba árvores",
         (Some(MountHarvest::Hide), _) => "montado: E / clique morde ou tira couro de carcaças",
+        _ if mount.species.leaps() => "montado: Espaço pula",
         (None, Some(_)) => "montado: E / clique morde",
         (None, None) => "montado",
     }
@@ -1242,6 +1246,25 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
             line(p(-10.0, -1.0), p(10.0, -1.0), 1.5, Color::from_rgba(226, 200, 160, 255));
             line(p(-4.0, 6.0), p(-6.0, 15.0), 2.0, wood_dark);
             line(p(5.0, 6.0), p(7.0, 15.0), 2.0, wood_dark);
+        }
+        ItemId::BeelzebufoSaddle => {
+            // Sela baixa e larga, com tiras verdes.
+            let leather = Color::from_rgba(116, 90, 52, 255);
+            draw_ellipse(c.x, c.y + 2.0 * u, 16.0 * u, 7.0 * u, 0.0, leather);
+            line(p(-16.0, 2.0), p(16.0, 2.0), 2.0, Color::from_rgba(96, 130, 60, 255));
+            rect_at(-10.0, -8.0, 6.0, 7.0, Color::from_rgba(140, 108, 64, 255));
+            line(p(-6.0, 8.0), p(-9.0, 16.0), 2.0, wood_dark);
+            line(p(6.0, 8.0), p(9.0, 16.0), 2.0, wood_dark);
+        }
+        ItemId::SarcosuchusSaddle => {
+            // Sela comprida, com placas de couro.
+            let leather = Color::from_rgba(84, 64, 40, 255);
+            draw_ellipse(c.x, c.y, 18.0 * u, 7.0 * u, 0.0, leather);
+            for i in -2..=2 {
+                rect_at(i as f32 * 6.0 - 2.0, -7.0, 4.0, 4.0, Color::from_rgba(96, 110, 70, 255));
+            }
+            line(p(-8.0, 6.0), p(-10.0, 15.0), 2.0, wood_dark);
+            line(p(8.0, 6.0), p(10.0, 15.0), 2.0, wood_dark);
         }
         ItemId::ArgentavisSaddle => {
             // Sela grande com fivela de metal.

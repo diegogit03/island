@@ -13,7 +13,7 @@ use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -101,8 +101,8 @@ pub enum Command {
     /// Alternar seguir/ficar do dino aberto.
     ToggleOrder,
     Mount,
-    /// Espaço montado num voador: decolar/pousar.
-    ToggleFlight,
+    /// Espaço montado: voador decola/pousa, beelzebufo pula.
+    MountAction,
     SpendAttribute(Attribute),
     Respawn,
     Chat(String),

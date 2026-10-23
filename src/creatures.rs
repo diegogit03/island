@@ -2,7 +2,8 @@
 //! domesticação e comportamento de dinos domesticados (seguir, ficar, montaria).
 //! Voadores (pteranodonte, argentavis) decolam para se mover e pousam ao parar; no ar ignoram
 //! árvores, pedras e construções. Fauna da era do gelo (mamute, smilodon, lobo) vive na neve, ao norte.
-//! Mamute e smilodon montados coletam (madeira / couro). Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
+//! Mamute e smilodon montados coletam (madeira / couro). No pântano (leste): anfíbios (beelzebufo,
+//! sarcosuchus, titanoboa) andam na lama e nadam nas lagoas; piranhas vivem só nas lagoas, em cardume. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,10 @@ pub enum Species {
     Mammoth,
     Smilodon,
     Wolf,
+    Beelzebufo,
+    Sarcosuchus,
+    Titanoboa,
+    Piranha,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +64,21 @@ pub enum Temperament {
     /// Ignora quem passa, mas revida quando atacado (mamute).
     Territorial,
 }
+
+/// Onde a espécie consegue ficar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Terrain {
+    Land,
+    /// Terra, água rasa e lagoas do pântano (mais rápida na água).
+    Amphibious,
+    /// Só lagoas do pântano.
+    Water,
+}
+
+/// Duração e altura (em `altitude`) do salto do beelzebufo.
+const LEAP_SECS: f32 = 0.6;
+const LEAP_HEIGHT: f32 = 0.5;
+const LEAP_COOLDOWN: f32 = 1.2;
 
 /// O que uma montaria coleta com E / clique quando não há inimigo ao alcance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +90,7 @@ pub enum MountHarvest {
 }
 
 impl Species {
-    pub const ALL: [Species; 9] = [
+    pub const ALL: [Species; 13] = [
         Species::Dodo,
         Species::Trilobite,
         Species::Dilophosaur,
@@ -80,6 +100,10 @@ impl Species {
         Species::Mammoth,
         Species::Smilodon,
         Species::Wolf,
+        Species::Beelzebufo,
+        Species::Sarcosuchus,
+        Species::Titanoboa,
+        Species::Piranha,
     ];
 
     pub fn name(self) -> &'static str {
@@ -93,16 +117,21 @@ impl Species {
             Species::Mammoth => "Mamute",
             Species::Smilodon => "Smilodon",
             Species::Wolf => "Lobo-cinzento",
+            Species::Beelzebufo => "Beelzebufo",
+            Species::Sarcosuchus => "Sarcosuchus",
+            Species::Titanoboa => "Titanoboa",
+            Species::Piranha => "Piranha",
         }
     }
 
     pub fn temperament(self) -> Temperament {
         match self {
-            Species::Dodo | Species::Trilobite | Species::Pteranodon => Temperament::Passive,
+            Species::Dodo | Species::Trilobite | Species::Pteranodon | Species::Beelzebufo => Temperament::Passive,
             Species::Dilophosaur | Species::Raptor | Species::Argentavis | Species::Smilodon | Species::Wolf => {
                 Temperament::Aggressive
             }
             Species::Mammoth => Temperament::Territorial,
+            Species::Sarcosuchus | Species::Titanoboa | Species::Piranha => Temperament::Aggressive,
         }
     }
 
@@ -119,6 +148,37 @@ impl Species {
         self.fly_speed().is_some()
     }
 
+    pub fn terrain(self) -> Terrain {
+        match self {
+            Species::Beelzebufo | Species::Sarcosuchus | Species::Titanoboa => Terrain::Amphibious,
+            Species::Piranha => Terrain::Water,
+            _ => Terrain::Land,
+        }
+    }
+
+    /// Anfíbios nadam mais rápido do que andam.
+    pub fn speed_on(self, tile: Tile) -> f32 {
+        if self.terrain() == Terrain::Amphibious && tile.is_water() {
+            1.5
+        } else {
+            1.0
+        }
+    }
+
+    /// Montado, Espaço pula (por cima de obstáculos e água).
+    pub fn leaps(self) -> bool {
+        self == Species::Beelzebufo
+    }
+
+    /// Quantos nascem juntos (alcateia, cardume).
+    pub fn group_size(self) -> usize {
+        match self {
+            Species::Wolf => 3,
+            Species::Piranha => 4,
+            _ => 1,
+        }
+    }
+
     /// Vida no nível 1.
     pub fn max_health(self) -> f32 {
         match self {
@@ -131,6 +191,10 @@ impl Species {
             Species::Mammoth => 260.0,
             Species::Smilodon => 110.0,
             Species::Wolf => 60.0,
+            Species::Beelzebufo => 80.0,
+            Species::Sarcosuchus => 180.0,
+            Species::Titanoboa => 160.0,
+            Species::Piranha => 15.0,
         }
     }
 
@@ -146,6 +210,10 @@ impl Species {
             Species::Mammoth => 220.0,
             Species::Smilodon => 130.0,
             Species::Wolf => 70.0,
+            Species::Beelzebufo => 70.0,
+            Species::Sarcosuchus => 170.0,
+            Species::Titanoboa => 140.0,
+            Species::Piranha => 15.0,
         }
     }
 
@@ -162,6 +230,10 @@ impl Species {
             Species::Mammoth => (40.0, 115.0),
             Species::Smilodon => (60.0, 185.0),
             Species::Wolf => (60.0, 175.0),
+            Species::Beelzebufo => (40.0, 140.0),
+            Species::Sarcosuchus => (40.0, 120.0),
+            Species::Titanoboa => (50.0, 130.0),
+            Species::Piranha => (60.0, 150.0),
         }
     }
 
@@ -176,6 +248,10 @@ impl Species {
             Species::Mammoth => 18.0,
             Species::Smilodon => 13.0,
             Species::Wolf => 10.0,
+            Species::Beelzebufo => 11.0,
+            Species::Sarcosuchus => 15.0,
+            Species::Titanoboa => 14.0,
+            Species::Piranha => 5.0,
         }
     }
 
@@ -188,6 +264,9 @@ impl Species {
             Species::Mammoth => Some((22.0, 1.8, 16.0, 140.0)),
             Species::Smilodon => Some((16.0, 1.0, 13.0, 200.0)),
             Species::Wolf => Some((9.0, 0.9, 11.0, 240.0)),
+            Species::Sarcosuchus => Some((20.0, 1.5, 14.0, 170.0)),
+            Species::Titanoboa => Some((18.0, 1.3, 16.0, 180.0)),
+            Species::Piranha => Some((5.0, 0.7, 8.0, 150.0)),
             _ => None,
         }
     }
@@ -195,10 +274,13 @@ impl Species {
     /// Golpes de coleta que a carcaça aguenta.
     pub fn harvest_hits(self) -> u32 {
         match self {
+            Species::Piranha => 1,
             Species::Dodo | Species::Trilobite => 3,
+            Species::Beelzebufo => 4,
             Species::Dilophosaur | Species::Pteranodon | Species::Wolf => 5,
             Species::Raptor | Species::Argentavis | Species::Smilodon => 6,
             Species::Mammoth => 9,
+            Species::Sarcosuchus | Species::Titanoboa => 7,
         }
     }
 
@@ -206,7 +288,13 @@ impl Species {
     pub fn is_big(self) -> bool {
         matches!(
             self,
-            Species::Dilophosaur | Species::Raptor | Species::Argentavis | Species::Mammoth | Species::Smilodon
+            Species::Dilophosaur
+                | Species::Raptor
+                | Species::Argentavis
+                | Species::Mammoth
+                | Species::Smilodon
+                | Species::Sarcosuchus
+                | Species::Titanoboa
         )
     }
 
@@ -218,7 +306,11 @@ impl Species {
             | Species::Pteranodon
             | Species::Argentavis
             | Species::Smilodon
-            | Species::Wolf => Diet::Carnivore,
+            | Species::Wolf
+            | Species::Beelzebufo
+            | Species::Sarcosuchus
+            | Species::Titanoboa
+            | Species::Piranha => Diet::Carnivore,
         }
     }
 
@@ -234,6 +326,10 @@ impl Species {
             Species::Mammoth => Some(280.0),
             Species::Smilodon => Some(180.0),
             Species::Wolf => Some(90.0),
+            Species::Beelzebufo => Some(110.0),
+            Species::Sarcosuchus => Some(220.0),
+            Species::Titanoboa => Some(200.0),
+            Species::Piranha => None,
         }
     }
 
@@ -245,6 +341,8 @@ impl Species {
             Species::Argentavis => Some(ItemId::ArgentavisSaddle),
             Species::Mammoth => Some(ItemId::MammothSaddle),
             Species::Smilodon => Some(ItemId::SmilodonSaddle),
+            Species::Beelzebufo => Some(ItemId::BeelzebufoSaddle),
+            Species::Sarcosuchus => Some(ItemId::SarcosuchusSaddle),
             _ => None,
         }
     }
@@ -270,6 +368,10 @@ impl Species {
             Species::Mammoth => 450.0,
             Species::Smilodon => 160.0,
             Species::Wolf => 60.0,
+            Species::Beelzebufo => 130.0,
+            Species::Sarcosuchus => 220.0,
+            Species::Titanoboa => 120.0,
+            Species::Piranha => 10.0,
         }
     }
 
@@ -285,6 +387,10 @@ impl Species {
             Species::Mammoth => 20,
             Species::Smilodon => 12,
             Species::Wolf => 6,
+            Species::Beelzebufo => 10,
+            Species::Sarcosuchus => 14,
+            Species::Titanoboa => 10,
+            Species::Piranha => 2,
         }
     }
 
@@ -300,6 +406,10 @@ impl Species {
             Species::Mammoth => 5,
             Species::Smilodon => 5,
             Species::Wolf => 9,
+            Species::Beelzebufo => 6,
+            Species::Sarcosuchus => 5,
+            Species::Titanoboa => 4,
+            Species::Piranha => 16,
         }
     }
 
@@ -314,14 +424,18 @@ impl Species {
             Species::Pteranodon => tile == Tile::Sand,
             Species::Argentavis => tile == Tile::Mountain,
             Species::Mammoth | Species::Smilodon | Species::Wolf => tile == Tile::Snow,
+            Species::Beelzebufo | Species::Titanoboa => tile == Tile::Swamp,
+            Species::Sarcosuchus | Species::Piranha => tile == Tile::SwampWater,
         }
     }
 
     /// Onde a criatura pode pisar: terra firme (trilobitas também andam na água rasa).
     pub fn can_stand(self, world: &World, pos: Vec2) -> bool {
-        let tile_ok = match world.tile_at(pos) {
-            Tile::ShallowWater => self == Species::Trilobite,
-            tile => tile.walkable(),
+        let tile = world.tile_at(pos);
+        let tile_ok = match self.terrain() {
+            Terrain::Land => tile.is_land() || (self == Species::Trilobite && tile == Tile::ShallowWater),
+            Terrain::Amphibious => tile.walkable(),
+            Terrain::Water => tile == Tile::SwampWater,
         };
         tile_ok && !world.blocked(pos, self.radius())
     }
@@ -399,6 +513,9 @@ pub struct Creature {
     pub flying: bool,
     /// Altura desenhada (0 = chão, 1 = voando); acompanha `flying` aos poucos.
     pub altitude: f32,
+    /// Salto em andamento (s restantes); durante o salto, `flying` fica ligado.
+    pub leap: f32,
+    leap_cooldown: f32,
     pub facing_left: bool,
     pub state: State,
     state_timer: f32,
@@ -465,6 +582,8 @@ impl Creature {
             mounted: false,
             flying: false,
             altitude: 0.0,
+            leap: 0.0,
+            leap_cooldown: 0.0,
             facing_left: false,
             state: State::Idle,
             state_timer: 1.0,
@@ -542,6 +661,30 @@ impl Creature {
     /// Pode decolar agora (voador acordado e sem excesso de carga).
     pub fn can_take_off(&self) -> bool {
         self.species.flies() && self.is_conscious() && !self.overweight()
+    }
+
+    /// Começa um salto (montaria que pula, no chão, sem excesso de carga). Retorna se pulou.
+    pub fn start_leap(&mut self) -> bool {
+        let ready = self.leap <= 0.0 && self.leap_cooldown <= 0.0 && !self.flying;
+        if !self.species.leaps() || !ready || !self.is_conscious() || self.overweight() {
+            return false;
+        }
+        self.leap = LEAP_SECS;
+        self.leap_cooldown = LEAP_COOLDOWN;
+        self.flying = true;
+        true
+    }
+
+    /// Fim do salto: cai onde está ou, se ali não dá (árvore, mar), no lugar livre mais próximo.
+    fn end_leap(&mut self, world: &World) {
+        self.leap = 0.0;
+        self.altitude = 0.0;
+        self.flying = false;
+        if !self.species.can_stand(world, self.pos)
+            && let Some(spot) = self.landing_spot(world)
+        {
+            self.pos = spot;
+        }
     }
 
     /// Pousa se houver chão livre embaixo. Retorna se está no chão.
@@ -652,6 +795,16 @@ impl Creature {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         let goal = if self.flying { 1.0 } else { 0.0 };
         self.altitude += (goal - self.altitude).clamp(-CLIMB_RATE * dt, CLIMB_RATE * dt);
+        self.leap_cooldown = (self.leap_cooldown - dt).max(0.0);
+        if self.leap > 0.0 {
+            self.leap -= dt;
+            // Arco do salto: sobe e desce.
+            let t = 1.0 - self.leap.max(0.0) / LEAP_SECS;
+            self.altitude = (std::f32::consts::PI * t).sin() * LEAP_HEIGHT;
+            if self.leap <= 0.0 {
+                self.end_leap(world);
+            }
+        }
         if let Some(corpse) = self.corpse.as_mut() {
             corpse.ttl -= dt;
             return None;
@@ -885,7 +1038,8 @@ impl Creature {
             _ => self.species.speeds().1 * ground_mult,
         };
         let load = if self.overweight() { 0.5 } else { 1.0 };
-        base * sprint * load
+        let leap = if self.leap > 0.0 { 1.6 } else { 1.0 };
+        base * sprint * load * leap
     }
 
     /// Lugar mais próximo onde a criatura pode ficar no chão (para pousos forçados).
@@ -929,6 +1083,11 @@ impl Creature {
             self.facing_left = dir.x < 0.0;
         }
         let start = self.pos;
+        let speed = if self.flying {
+            speed
+        } else {
+            speed * self.species.speed_on(world.tile_at(self.pos))
+        };
         let delta = dir * speed * dt;
         let wild = self.is_wild();
         for axis in [vec2(delta.x, 0.0), vec2(0.0, delta.y)] {
@@ -981,9 +1140,8 @@ pub fn populate(
             if !spawn_ok(species, world, x, y, pos, players) {
                 continue;
             }
-            // Lobos nascem em alcateia: o primeiro e até dois em volta.
-            let pack = if species == Species::Wolf { 3 } else { 1 };
-            for member in 0..pack {
+            // Lobos nascem em alcateia e piranhas em cardume: o primeiro e os outros em volta.
+            for member in 0..species.group_size() {
                 let at = if member == 0 {
                     pos
                 } else {
@@ -1406,6 +1564,93 @@ mod tests {
         {
             assert_eq!(world.tile_at(c.pos), Tile::Snow, "{:?}", c.species);
         }
+    }
+
+    /// Primeiro ponto (varrendo o mapa) onde `ok` vale.
+    fn find_spot(world: &World, ok: impl Fn(Vec2) -> bool) -> Vec2 {
+        let size = world.size_px();
+        let mut p = vec2(TILE * 1.5, TILE * 1.5);
+        while p.y < size.y {
+            if ok(p) {
+                return p;
+            }
+            p.x += TILE / 2.0;
+            if p.x > size.x {
+                p = vec2(TILE * 1.5, p.y + TILE / 2.0);
+            }
+        }
+        panic!("nenhum ponto serve");
+    }
+
+    #[test]
+    fn swamp_terrain_rules() {
+        let world = world();
+        let pond = find_spot(&world, |p| world.tile_at(p) == Tile::SwampWater);
+        assert!(Species::Piranha.can_stand(&world, pond) || world.blocked(pond, 5.0));
+        assert!(
+            !Species::Raptor.can_stand(&world, pond),
+            "bicho de terra não entra na lagoa"
+        );
+        let mud = find_spot(&world, |p| world.tile_at(p) == Tile::Swamp && !world.blocked(p, 15.0));
+        assert!(Species::Sarcosuchus.can_stand(&world, mud) && !Species::Piranha.can_stand(&world, mud));
+        assert!(Species::Sarcosuchus.speed_on(Tile::SwampWater) > Species::Sarcosuchus.speed_on(Tile::Swamp));
+        for s in [Species::Beelzebufo, Species::Sarcosuchus, Species::Titanoboa] {
+            assert!(s.taming_food().is_some(), "{s:?} domesticável");
+        }
+        assert!(Species::Piranha.taming_food().is_none());
+    }
+
+    #[test]
+    fn piranhas_swim_in_schools() {
+        let world = world();
+        let mut rng = Rng::new(4);
+        let (mut creatures, mut next_id) = (Vec::new(), 1);
+        populate(&mut creatures, &world, &[world.spawn], &mut rng, 5000, &mut next_id);
+        let fish: Vec<Vec2> = creatures
+            .iter()
+            .filter(|c| c.species == Species::Piranha)
+            .map(|c| c.pos)
+            .collect();
+        assert!(fish.len() >= 4);
+        assert!(fish.iter().all(|&p| world.tile_at(p) == Tile::SwampWater));
+        assert!(
+            fish.iter()
+                .any(|a| fish.iter().any(|b| a != b && a.distance(*b) < 80.0))
+        );
+    }
+
+    #[test]
+    fn beelzebufo_leaps_over_a_tree() {
+        let world = world();
+        // Sapo domesticado logo à esquerda de uma árvore, pulando para a direita.
+        let tree = world
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::world::NodeKind::Tree)
+            .map(|n| n.pos)
+            .find(|&t| {
+                [-30.0, 40.0]
+                    .iter()
+                    .all(|&dx| Species::Beelzebufo.can_stand(&world, t + vec2(dx, 0.0)))
+            })
+            .expect("árvore com espaço dos dois lados");
+        let mut frog = Creature::new(Species::Beelzebufo, tree - vec2(30.0, 0.0));
+        frog.command = Some(Command::Stay);
+        frog.mounted = true;
+        let input = AiInput { players: &[] };
+        let mut rng = Rng::new(1);
+        let dt = 1.0 / 60.0;
+        assert!(frog.start_leap());
+        assert!(!frog.start_leap(), "um salto por vez");
+        while frog.leap > 0.0 {
+            if frog.pos.x < tree.x + 40.0 {
+                frog.ride(&world, vec2(1.0, 0.0), frog.ride_speed(1.4, 1.0), dt);
+            }
+            frog.update(&world, &input, &mut rng, dt);
+        }
+        assert!(frog.pos.x > tree.x + 9.0, "passou por cima da árvore");
+        assert!(!frog.flying && frog.altitude == 0.0);
+        assert!(Species::Beelzebufo.can_stand(&world, frog.pos));
     }
 
     #[test]

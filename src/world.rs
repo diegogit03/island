@@ -19,6 +19,10 @@ pub enum Tile {
     Mountain,
     /// Norte gelado da ilha (fauna da era do gelo).
     Snow,
+    /// Lama do pântano, a leste.
+    Swamp,
+    /// Lagoa do pântano (rasa, dá para andar e beber; tem piranhas).
+    SwampWater,
 }
 
 impl Tile {
@@ -27,12 +31,20 @@ impl Tile {
     }
 
     pub fn is_land(self) -> bool {
-        matches!(self, Tile::Sand | Tile::Grass | Tile::Mountain | Tile::Snow)
+        matches!(
+            self,
+            Tile::Sand | Tile::Grass | Tile::Mountain | Tile::Snow | Tile::Swamp
+        )
+    }
+
+    pub fn is_water(self) -> bool {
+        matches!(self, Tile::DeepWater | Tile::ShallowWater | Tile::SwampWater)
     }
 
     pub fn speed_factor(self) -> f32 {
         match self {
-            Tile::ShallowWater => 0.55,
+            Tile::ShallowWater | Tile::SwampWater => 0.55,
+            Tile::Swamp => 0.85,
             Tile::Sand => 0.9,
             Tile::Mountain => 0.85,
             Tile::Snow => 0.9,
@@ -174,7 +186,41 @@ impl World {
         world.spawn = world.find_beach_spawn();
         world.scatter_nodes();
         world.freeze_north();
+        world.flood_east();
         world
+    }
+
+    /// Bioma de pântano: a grama e a areia do leste viram lama, com lagoas onde não há nós.
+    /// Como `freeze_north`, roda depois de espalhar os nós e não consome RNG.
+    fn flood_east(&mut self) {
+        let occupied: std::collections::HashSet<(i32, i32)> = self
+            .nodes
+            .iter()
+            .map(|n| ((n.pos.x / TILE).floor() as i32, (n.pos.y / TILE).floor() as i32))
+            .collect();
+        let spawn = self.spawn;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let i = y * self.width + x;
+                if !matches!(self.tiles[i], Tile::Grass | Tile::Sand) {
+                    continue;
+                }
+                let nx = x as f32 / self.width as f32 * 2.0 - 1.0;
+                let noise = fbm(x as f32 / 18.0, y as f32 / 18.0, self.seed.wrapping_add(53), 3);
+                let center = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
+                // Longe do spawn e com uma faixa de grama separando da neve.
+                let near_snow = self.cold(x, y) < -0.12;
+                if nx + (noise - 0.5) * 0.5 < 0.32 || near_snow || center.distance(spawn) < TILE * 12.0 {
+                    continue;
+                }
+                let pond = fbm(x as f32 / 6.0, y as f32 / 6.0, self.seed.wrapping_add(59), 2);
+                self.tiles[i] = if pond > 0.6 && !occupied.contains(&(x as i32, y as i32)) {
+                    Tile::SwampWater
+                } else {
+                    Tile::Swamp
+                };
+            }
+        }
     }
 
     /// Bioma de gelo: a grama e a areia do norte da ilha viram neve. Roda depois de espalhar os nós
@@ -182,14 +228,19 @@ impl World {
     fn freeze_north(&mut self) {
         for y in 0..self.height {
             for x in 0..self.width {
-                let ny = y as f32 / self.height as f32 * 2.0 - 1.0;
-                let noise = fbm(x as f32 / 18.0, y as f32 / 18.0, self.seed.wrapping_add(41), 3);
                 let i = y * self.width + x;
-                if ny + (noise - 0.5) * 0.5 < -0.3 && matches!(self.tiles[i], Tile::Grass | Tile::Sand) {
+                if self.cold(x, y) < -0.3 && matches!(self.tiles[i], Tile::Grass | Tile::Sand) {
                     self.tiles[i] = Tile::Snow;
                 }
             }
         }
+    }
+
+    /// Quanto mais negativo, mais frio (norte); abaixo de -0.3 é neve.
+    fn cold(&self, x: usize, y: usize) -> f32 {
+        let ny = y as f32 / self.height as f32 * 2.0 - 1.0;
+        let noise = fbm(x as f32 / 18.0, y as f32 / 18.0, self.seed.wrapping_add(41), 3);
+        ny + (noise - 0.5) * 0.5
     }
 
     /// Primeiro tile de areia subindo a partir do centro da borda sul.
@@ -487,6 +538,8 @@ mod tests {
     fn island_has_beach_and_valid_spawn() {
         let world = World::generate(1337, 160, 160);
         assert_eq!(world.tile_at(world.spawn), Tile::Sand);
+        let count = |t: Tile| world.tiles.iter().filter(|&&x| x == t).count();
+        assert!(count(Tile::Snow) > 100 && count(Tile::Swamp) > 100 && count(Tile::SwampWater) > 20);
         assert!(!world.blocked(world.spawn, 7.0));
         let count = |kind| world.nodes.iter().filter(|n| n.kind == kind).count();
         assert!(count(NodeKind::Tree) > 50);
