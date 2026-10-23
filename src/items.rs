@@ -28,6 +28,8 @@ pub enum ItemId {
     RaptorSaddle,
     PteranodonSaddle,
     ArgentavisSaddle,
+    MammothSaddle,
+    SmilodonSaddle,
     Campfire,
     Forge,
     Workbench,
@@ -53,7 +55,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 29] = [
+    pub const ALL: [ItemId; 31] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -76,6 +78,8 @@ impl ItemId {
         ItemId::RaptorSaddle,
         ItemId::PteranodonSaddle,
         ItemId::ArgentavisSaddle,
+        ItemId::MammothSaddle,
+        ItemId::SmilodonSaddle,
         ItemId::Campfire,
         ItemId::Forge,
         ItemId::Workbench,
@@ -110,6 +114,8 @@ impl ItemId {
             ItemId::RaptorSaddle => "Sela de Raptor",
             ItemId::PteranodonSaddle => "Sela de Pteranodonte",
             ItemId::ArgentavisSaddle => "Sela de Argentavis",
+            ItemId::MammothSaddle => "Sela de Mamute",
+            ItemId::SmilodonSaddle => "Sela de Smilodon",
             ItemId::Campfire => "Fogueira",
             ItemId::Workbench => "Bancada",
             ItemId::StorageBox => "Caixa de Armazenamento",
@@ -131,7 +137,11 @@ impl ItemId {
             | ItemId::MetalIngot => 100,
             ItemId::RawMeat | ItemId::CookedMeat => 40,
             ItemId::Narcotic => 50,
-            ItemId::RaptorSaddle | ItemId::PteranodonSaddle | ItemId::ArgentavisSaddle => 1,
+            ItemId::RaptorSaddle
+            | ItemId::PteranodonSaddle
+            | ItemId::ArgentavisSaddle
+            | ItemId::MammothSaddle
+            | ItemId::SmilodonSaddle => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
             ItemId::StonePickaxe
@@ -158,6 +168,8 @@ impl ItemId {
             ItemId::RaptorSaddle => 6.0,
             ItemId::PteranodonSaddle => 5.0,
             ItemId::ArgentavisSaddle => 10.0,
+            ItemId::MammothSaddle => 14.0,
+            ItemId::SmilodonSaddle => 6.0,
             ItemId::WoodWall | ItemId::WoodDoor => 3.0,
             ItemId::WoodFoundation => 4.0,
             ItemId::Campfire => 5.0,

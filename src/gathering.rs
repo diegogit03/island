@@ -70,6 +70,23 @@ fn roll_base_yield(kind: NodeKind, tool: Option<ToolKind>, rng: &mut Rng) -> Vec
     drops
 }
 
+/// Golpe de mamute montado numa árvore: muito mais madeira que qualquer machado.
+pub fn roll_mammoth_tree(rng: &mut Rng) -> Vec<(ItemId, u32)> {
+    vec![
+        (ItemId::Wood, rng.range_u32(8, 12)),
+        (ItemId::Thatch, rng.range_u32(1, 3)),
+    ]
+}
+
+/// Golpe de smilodon montado numa carcaça: couro de sobra e um pouco de carne.
+pub fn roll_smilodon_corpse(corpse: Species, rng: &mut Rng) -> Vec<(ItemId, u32)> {
+    let big = u32::from(corpse.is_big());
+    vec![
+        (ItemId::Hide, rng.range_u32(4, 6) + big * 2),
+        (ItemId::RawMeat, rng.range_u32(1, 2)),
+    ]
+}
+
 /// O que cada golpe numa carcaça rende. Machado favorece carne; picareta, couro.
 pub fn roll_corpse_yield(species: Species, tool: Option<ToolKind>, tier: u32, rng: &mut Rng) -> Vec<(ItemId, u32)> {
     let big = u32::from(species.is_big());

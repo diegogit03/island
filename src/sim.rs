@@ -7,7 +7,9 @@ use macroquad::math::{Vec2, vec2};
 use crate::building::{self, Layer, PlaceError, StructureKind};
 use crate::combat::{self, Projectile};
 use crate::crafting::{self, CraftError, CraftQueue, RECIPES, Recipe};
-use crate::creatures::{self, AiInput, AiPlayer, Command as Order, Creature, CreatureSave, Event, Hit, Species};
+use crate::creatures::{
+    self, AiInput, AiPlayer, Command as Order, Creature, CreatureSave, Event, Hit, MountHarvest, Species,
+};
 use crate::daynight;
 use crate::gathering;
 use crate::inventory::{HOTBAR_SIZE, INVENTORY_SIZE, Inventory, Stack};
@@ -942,6 +944,72 @@ impl Sim {
         if let Some(i) = target {
             let hit = self.creatures[i].take_hit(damage, 0.0, pos);
             self.report_hit(Some(pi), i, damage, hit);
+        } else if let Some(harvest) = self.creature(id).and_then(|m| m.species.mount_harvest()) {
+            self.mount_gather(pi, id, harvest, pos, reach, s);
+        }
+    }
+
+    /// Montaria coletora sem inimigo à frente: mamute derruba árvores, smilodon tira couro de carcaças.
+    /// O que sai vai para a carga da montaria (o que não couber, para o jogador; depois, o chão).
+    fn mount_gather(&mut self, pi: usize, id: u32, harvest: MountHarvest, pos: Vec2, reach: f32, s: f32) {
+        let ahead = |p: Vec2| (p.x - pos.x) * s >= -4.0;
+        let nearest = |items: &mut dyn Iterator<Item = (usize, f32)>| {
+            items
+                .filter(|&(_, gap)| gap <= reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        let (at, drops) = match harvest {
+            MountHarvest::Wood => {
+                let mut trees = self
+                    .world
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| n.kind == NodeKind::Tree && n.is_alive() && ahead(n.pos))
+                    .map(|(i, n)| (i, n.pos.distance(pos) - n.kind.collision_radius()));
+                let Some(i) = nearest(&mut trees) else { return };
+                let node = &mut self.world.nodes[i];
+                node.hp -= 1;
+                node.shake = 0.2;
+                if node.hp == 0 {
+                    node.respawn_timer = node.kind.respawn_secs();
+                }
+                (node.pos, gathering::roll_mammoth_tree(&mut self.rng))
+            }
+            MountHarvest::Hide => {
+                let mut corpses = self
+                    .creatures
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| !c.is_alive() && ahead(c.pos))
+                    .map(|(i, c)| (i, c.pos.distance(pos) - c.species.radius()));
+                let Some(i) = nearest(&mut corpses) else { return };
+                let corpse = &mut self.creatures[i];
+                if !corpse.harvest() {
+                    return;
+                }
+                let (at, species) = (corpse.pos, corpse.species);
+                (at, gathering::roll_smilodon_corpse(species, &mut self.rng))
+            }
+        };
+        self.gain_xp(pi, progression::XP_GATHER);
+        let mut spilled = Vec::new();
+        for (row, (item, n)) in drops.into_iter().enumerate() {
+            let in_mount = self
+                .creature_mut(id)
+                .and_then(|m| m.inventory.as_mut())
+                .map_or(n, |inv| inv.add(item, n));
+            let left = self.players[pi].inventory.add(item, in_mount);
+            if left > 0 {
+                spilled.push(Stack::new(item, left));
+            }
+            let popup = at - vec2(0.0, 30.0 + row as f32 * 14.0);
+            self.popup(popup, format!("+{n} {}", item.name()));
+        }
+        if !spilled.is_empty() {
+            self.world.drop_bag(pos, spilled, BagKind::Dropped);
+            self.notify(pi, "Montaria e inventário cheios: itens caíram no chão");
         }
     }
 
@@ -1478,7 +1546,7 @@ impl Sim {
             creatures: self
                 .creatures
                 .iter()
-                .map(|c| CreatureView::new(c, Some(c.id) == open_creature))
+                .map(|c| CreatureView::new(c, Some(c.id) == open_creature || Some(c.id) == me.mount))
                 .collect(),
             projectiles: self.projectiles.iter().map(|p| p.pos.into()).collect(),
             players: self.players.iter().map(PlayerState::view).collect(),
@@ -1633,6 +1701,9 @@ impl Sim {
             vec2(120.0, 10.0),
             vec2(-130.0, -30.0),
             vec2(150.0, 90.0),
+            vec2(-60.0, -90.0),
+            vec2(30.0, 130.0),
+            vec2(-150.0, 110.0),
         ];
         for (species, offset) in Species::ALL.into_iter().zip(offsets) {
             let mut c = Creature::new(species, base + offset);
@@ -1642,7 +1713,7 @@ impl Sim {
         let mut corpse = Creature::new(Species::Dodo, base + vec2(40.0, -50.0));
         corpse.take_hit(999.0, 0.0, base);
         self.add_creature(corpse);
-        let dilo = self.creatures.len() - 5;
+        let dilo = self.creatures.len() - 8;
         self.creatures[dilo].take_hit(30.0, 20.0, base);
     }
 
@@ -1676,6 +1747,41 @@ impl Sim {
                 c.moving = true;
             }
         }
+    }
+
+    /// Primeiro jogador no bioma de gelo, montado num mamute de frente para uma árvore, com um smilodon
+    /// domesticado, uma alcateia de lobos e um mamute selvagem por perto.
+    pub fn demo_ice(&mut self) {
+        let world = &self.world;
+        let Some(spot) = world
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Tree && world.tile_at(n.pos) == Tile::Snow)
+            .map(|n| n.pos - vec2(40.0, 4.0))
+            .find(|&p| Species::Mammoth.can_stand(world, p) && world.tile_at(p - vec2(160.0, 0.0)) == Tile::Snow)
+        else {
+            return;
+        };
+        self.creatures.clear();
+        self.players[0].player.pos = spot;
+        let mammoth = self.demo_tamed(Species::Mammoth, spot, 22);
+        self.demo_tamed(Species::Smilodon, spot + vec2(-70.0, 46.0), 14);
+        let wild = [
+            (Species::Wolf, vec2(150.0, -70.0), 6),
+            (Species::Wolf, vec2(178.0, -40.0), 6),
+            (Species::Wolf, vec2(160.0, -100.0), 6),
+            (Species::Mammoth, vec2(-150.0, -40.0), 12),
+        ];
+        for (species, offset, level) in wild {
+            let world = &self.world;
+            let Some(at) = world.find_near(spot + offset, |p| species.can_stand(world, p)) else {
+                continue;
+            };
+            let mut c = Creature::new(species, at).with_level(level);
+            c.facing_left = offset.x > 0.0;
+            self.add_creature(c);
+        }
+        self.mount_creature(0, mammoth);
     }
 
     /// Painel de carga de um argentavis domesticado.
@@ -1983,6 +2089,62 @@ mod tests {
         wild.flying = true;
         let p = Player::new(pos);
         assert_eq!(find_target(&sim.world, &[wild], &p, None), None);
+    }
+
+    #[test]
+    fn mounted_mammoth_farms_wood_into_its_cargo() {
+        let (mut sim, _) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        let tree = sim.world.nodes.iter().find(|n| n.kind == NodeKind::Tree).unwrap().pos;
+        let id = sim.demo_tamed(Species::Mammoth, tree - vec2(30.0, 0.0), 1);
+        sim.mount_creature(0, id);
+        sim.creature_mut(id).unwrap().facing_left = false;
+        let tree_hp = |sim: &Sim| -> u32 { sim.world.nodes.iter().map(|n| n.hp).sum() };
+        let before = tree_hp(&sim);
+        sim.mount_bite(0);
+        assert_eq!(tree_hp(&sim), before - 1, "um golpe numa árvore");
+        let cargo = sim
+            .creature(id)
+            .unwrap()
+            .inventory
+            .as_ref()
+            .unwrap()
+            .count(ItemId::Wood);
+        assert!(cargo >= 8, "madeira na carga do mamute: {cargo}");
+        assert_eq!(sim.players[0].inventory.count(ItemId::Wood), 0);
+    }
+
+    #[test]
+    fn mounted_smilodon_skins_corpses() {
+        let (mut sim, _) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        let pos = sim.players[0].player.pos;
+        let mut raptor = Creature::new(Species::Raptor, pos + vec2(28.0, 0.0));
+        raptor.take_hit(999.0, 0.0, pos);
+        let corpse = sim.add_creature(raptor);
+        let id = sim.demo_tamed(Species::Smilodon, pos, 1);
+        sim.mount_creature(0, id);
+        sim.creature_mut(id).unwrap().facing_left = false;
+        sim.mount_bite(0);
+        let hide = sim
+            .creature(id)
+            .unwrap()
+            .inventory
+            .as_ref()
+            .unwrap()
+            .count(ItemId::Hide);
+        assert!(hide >= 6, "couro de raptor: {hide}");
+        let left = sim.creature(corpse).unwrap().corpse.unwrap().harvest_left;
+        assert_eq!(left, Species::Raptor.harvest_hits() - 1);
+    }
+
+    #[test]
+    fn rider_sees_the_mount_cargo() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        let id = mount_flyer(&mut sim, Species::Argentavis);
+        let snap = sim.snapshot(ids[0]).unwrap();
+        let view = snap.creatures.iter().find(|c| c.save.id == id).unwrap();
+        assert!(view.save.inventory.is_some(), "carga e sobrecarga no HUD de quem monta");
     }
 
     #[test]

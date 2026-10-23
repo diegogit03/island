@@ -13,7 +13,7 @@ use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;

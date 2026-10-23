@@ -72,9 +72,14 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - Espaço decola/pousa; no ar ignora árvores, pedras, construções e água; predadores do chão não alcançam quem voa
   - Pouso forçado em terra ao morrer, sair do jogo ou perder a montaria no ar
 - ✅ Peso de carga dos dinos (cada item tem peso; acima do limite o dino fica lento e não decola)
+- ✅ Bioma de gelo no norte da ilha (neve e pinheiros nevados) com fauna da era do gelo, toda domesticável:
+  - **Mamute** (territorial: revida quando atacado); montado, derruba árvores e enche a carga de madeira
+  - **Smilodon** (agressivo); montado, tira muito couro das carcaças
+  - **Lobo-cinzento** (agressivo, anda em alcateia de até 3)
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
 - Áudio (macroquad já suporta), menus, opções, rebind de teclas
 - Biomas de selva e pântano, cavernas
+- Frio no bioma de gelo (roupas de pele, fogueira esquenta) e domesticados que lutam junto com o dono
 - Mapa/minimapa, notas exploráveis, chefes simples
 
 ## v1.0+ — MMO

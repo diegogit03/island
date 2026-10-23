@@ -17,6 +17,8 @@ pub enum Tile {
     Grass,
     /// Interior rochoso da ilha, com metal.
     Mountain,
+    /// Norte gelado da ilha (fauna da era do gelo).
+    Snow,
 }
 
 impl Tile {
@@ -25,7 +27,7 @@ impl Tile {
     }
 
     pub fn is_land(self) -> bool {
-        matches!(self, Tile::Sand | Tile::Grass | Tile::Mountain)
+        matches!(self, Tile::Sand | Tile::Grass | Tile::Mountain | Tile::Snow)
     }
 
     pub fn speed_factor(self) -> f32 {
@@ -33,6 +35,7 @@ impl Tile {
             Tile::ShallowWater => 0.55,
             Tile::Sand => 0.9,
             Tile::Mountain => 0.85,
+            Tile::Snow => 0.9,
             _ => 1.0,
         }
     }
@@ -170,7 +173,23 @@ impl World {
         };
         world.spawn = world.find_beach_spawn();
         world.scatter_nodes();
+        world.freeze_north();
         world
+    }
+
+    /// Bioma de gelo: a grama e a areia do norte da ilha viram neve. Roda depois de espalhar os nós
+    /// e não consome RNG, então os nós (e seus índices em saves antigos) continuam os mesmos.
+    fn freeze_north(&mut self) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let ny = y as f32 / self.height as f32 * 2.0 - 1.0;
+                let noise = fbm(x as f32 / 18.0, y as f32 / 18.0, self.seed.wrapping_add(41), 3);
+                let i = y * self.width + x;
+                if ny + (noise - 0.5) * 0.5 < -0.3 && matches!(self.tiles[i], Tile::Grass | Tile::Sand) {
+                    self.tiles[i] = Tile::Snow;
+                }
+            }
+        }
     }
 
     /// Primeiro tile de areia subindo a partir do centro da borda sul.

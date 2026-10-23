@@ -1,7 +1,8 @@
 //! Fauna: espécies, níveis, IA simples (parado, vagando, fugindo, perseguindo), torpor/desmaio,
 //! domesticação e comportamento de dinos domesticados (seguir, ficar, montaria).
 //! Voadores (pteranodonte, argentavis) decolam para se mover e pousam ao parar; no ar ignoram
-//! árvores, pedras e construções. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
+//! árvores, pedras e construções. Fauna da era do gelo (mamute, smilodon, lobo) vive na neve, ao norte.
+//! Mamute e smilodon montados coletam (madeira / couro). Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -46,22 +47,39 @@ pub enum Species {
     Raptor,
     Pteranodon,
     Argentavis,
+    Mammoth,
+    Smilodon,
+    Wolf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Temperament {
     Passive,
     Aggressive,
+    /// Ignora quem passa, mas revida quando atacado (mamute).
+    Territorial,
+}
+
+/// O que uma montaria coleta com E / clique quando não há inimigo ao alcance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MountHarvest {
+    /// Mamute: derruba árvores (muita madeira).
+    Wood,
+    /// Smilodon: tira couro de carcaças.
+    Hide,
 }
 
 impl Species {
-    pub const ALL: [Species; 6] = [
+    pub const ALL: [Species; 9] = [
         Species::Dodo,
         Species::Trilobite,
         Species::Dilophosaur,
         Species::Raptor,
         Species::Pteranodon,
         Species::Argentavis,
+        Species::Mammoth,
+        Species::Smilodon,
+        Species::Wolf,
     ];
 
     pub fn name(self) -> &'static str {
@@ -72,13 +90,19 @@ impl Species {
             Species::Raptor => "Raptor",
             Species::Pteranodon => "Pteranodonte",
             Species::Argentavis => "Argentavis",
+            Species::Mammoth => "Mamute",
+            Species::Smilodon => "Smilodon",
+            Species::Wolf => "Lobo-cinzento",
         }
     }
 
     pub fn temperament(self) -> Temperament {
         match self {
             Species::Dodo | Species::Trilobite | Species::Pteranodon => Temperament::Passive,
-            Species::Dilophosaur | Species::Raptor | Species::Argentavis => Temperament::Aggressive,
+            Species::Dilophosaur | Species::Raptor | Species::Argentavis | Species::Smilodon | Species::Wolf => {
+                Temperament::Aggressive
+            }
+            Species::Mammoth => Temperament::Territorial,
         }
     }
 
@@ -104,6 +128,9 @@ impl Species {
             Species::Raptor => 90.0,
             Species::Pteranodon => 70.0,
             Species::Argentavis => 150.0,
+            Species::Mammoth => 260.0,
+            Species::Smilodon => 110.0,
+            Species::Wolf => 60.0,
         }
     }
 
@@ -116,6 +143,9 @@ impl Species {
             Species::Raptor => 120.0,
             Species::Pteranodon => 70.0,
             Species::Argentavis => 160.0,
+            Species::Mammoth => 220.0,
+            Species::Smilodon => 130.0,
+            Species::Wolf => 70.0,
         }
     }
 
@@ -129,6 +159,9 @@ impl Species {
             // Voadores são desajeitados no chão.
             Species::Pteranodon => (35.0, 95.0),
             Species::Argentavis => (35.0, 85.0),
+            Species::Mammoth => (40.0, 115.0),
+            Species::Smilodon => (60.0, 185.0),
+            Species::Wolf => (60.0, 175.0),
         }
     }
 
@@ -140,6 +173,9 @@ impl Species {
             Species::Raptor => 12.0,
             Species::Pteranodon => 10.0,
             Species::Argentavis => 13.0,
+            Species::Mammoth => 18.0,
+            Species::Smilodon => 13.0,
+            Species::Wolf => 10.0,
         }
     }
 
@@ -149,6 +185,9 @@ impl Species {
             Species::Dilophosaur => Some((8.0, 1.4, 12.0, 160.0)),
             Species::Raptor => Some((12.0, 1.1, 12.0, 220.0)),
             Species::Argentavis => Some((14.0, 1.4, 14.0, 180.0)),
+            Species::Mammoth => Some((22.0, 1.8, 16.0, 140.0)),
+            Species::Smilodon => Some((16.0, 1.0, 13.0, 200.0)),
+            Species::Wolf => Some((9.0, 0.9, 11.0, 240.0)),
             _ => None,
         }
     }
@@ -157,20 +196,29 @@ impl Species {
     pub fn harvest_hits(self) -> u32 {
         match self {
             Species::Dodo | Species::Trilobite => 3,
-            Species::Dilophosaur | Species::Pteranodon => 5,
-            Species::Raptor | Species::Argentavis => 6,
+            Species::Dilophosaur | Species::Pteranodon | Species::Wolf => 5,
+            Species::Raptor | Species::Argentavis | Species::Smilodon => 6,
+            Species::Mammoth => 9,
         }
     }
 
     /// Animais maiores rendem mais carne/couro.
     pub fn is_big(self) -> bool {
-        matches!(self, Species::Dilophosaur | Species::Raptor | Species::Argentavis)
+        matches!(
+            self,
+            Species::Dilophosaur | Species::Raptor | Species::Argentavis | Species::Mammoth | Species::Smilodon
+        )
     }
 
     pub fn diet(self) -> Diet {
         match self {
-            Species::Dodo | Species::Trilobite => Diet::Herbivore,
-            Species::Dilophosaur | Species::Raptor | Species::Pteranodon | Species::Argentavis => Diet::Carnivore,
+            Species::Dodo | Species::Trilobite | Species::Mammoth => Diet::Herbivore,
+            Species::Dilophosaur
+            | Species::Raptor
+            | Species::Pteranodon
+            | Species::Argentavis
+            | Species::Smilodon
+            | Species::Wolf => Diet::Carnivore,
         }
     }
 
@@ -183,6 +231,9 @@ impl Species {
             Species::Raptor => Some(160.0),
             Species::Pteranodon => Some(130.0),
             Species::Argentavis => Some(220.0),
+            Species::Mammoth => Some(280.0),
+            Species::Smilodon => Some(180.0),
+            Species::Wolf => Some(90.0),
         }
     }
 
@@ -192,6 +243,17 @@ impl Species {
             Species::Raptor => Some(ItemId::RaptorSaddle),
             Species::Pteranodon => Some(ItemId::PteranodonSaddle),
             Species::Argentavis => Some(ItemId::ArgentavisSaddle),
+            Species::Mammoth => Some(ItemId::MammothSaddle),
+            Species::Smilodon => Some(ItemId::SmilodonSaddle),
+            _ => None,
+        }
+    }
+
+    /// O que a espécie coleta quando montada (`None` = só morde).
+    pub fn mount_harvest(self) -> Option<MountHarvest> {
+        match self {
+            Species::Mammoth => Some(MountHarvest::Wood),
+            Species::Smilodon => Some(MountHarvest::Hide),
             _ => None,
         }
     }
@@ -205,6 +267,9 @@ impl Species {
             Species::Raptor => 150.0,
             Species::Pteranodon => 80.0,
             Species::Argentavis => 320.0,
+            Species::Mammoth => 450.0,
+            Species::Smilodon => 160.0,
+            Species::Wolf => 60.0,
         }
     }
 
@@ -217,6 +282,9 @@ impl Species {
             Species::Raptor => 12,
             Species::Pteranodon => 8,
             Species::Argentavis => 20,
+            Species::Mammoth => 20,
+            Species::Smilodon => 12,
+            Species::Wolf => 6,
         }
     }
 
@@ -229,6 +297,9 @@ impl Species {
             Species::Raptor => 6,
             Species::Pteranodon => 6,
             Species::Argentavis => 4,
+            Species::Mammoth => 5,
+            Species::Smilodon => 5,
+            Species::Wolf => 9,
         }
     }
 
@@ -242,6 +313,7 @@ impl Species {
             Species::Raptor => tile == Tile::Grass && world.forest(x, y) > 0.55,
             Species::Pteranodon => tile == Tile::Sand,
             Species::Argentavis => tile == Tile::Mountain,
+            Species::Mammoth | Species::Smilodon | Species::Wolf => tile == Tile::Snow,
         }
     }
 
@@ -530,7 +602,7 @@ impl Creature {
                 self.state = State::Flee;
                 self.state_timer = FLEE_SECS;
             }
-            Temperament::Aggressive => self.state = State::Chase,
+            Temperament::Aggressive | Temperament::Territorial => self.state = State::Chase,
         }
         Hit::Hurt
     }
@@ -609,7 +681,9 @@ impl Creature {
 
         if let Some((_, _, _, aggro)) = self.species.attack() {
             let keep_chasing = self.state == State::Chase && dist < aggro * LEASH;
-            if target.is_some() && (dist < aggro || keep_chasing) {
+            // Territoriais só perseguem depois de atacados (`take_hit` muda o estado).
+            let hunts = self.species.temperament() == Temperament::Aggressive;
+            if target.is_some() && ((hunts && dist < aggro) || keep_chasing) {
                 self.state = State::Chase;
             } else if self.state == State::Chase {
                 self.start_idle(rng);
@@ -703,7 +777,7 @@ impl Creature {
             self.knocked_out = false;
             self.taming = None;
             self.state = match self.species.temperament() {
-                Temperament::Aggressive => State::Chase,
+                Temperament::Aggressive | Temperament::Territorial => State::Chase,
                 Temperament::Passive => State::Flee,
             };
             self.state_timer = FLEE_SECS;
@@ -904,8 +978,22 @@ pub fn populate(
             let x = rng.range_u32(1, world.width as u32 - 2) as i32;
             let y = rng.range_u32(1, world.height as u32 - 2) as i32;
             let pos = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
-            if spawn_ok(species, world, x, y, pos, players) {
-                let mut c = Creature::new(species, pos).with_level(roll_level(rng));
+            if !spawn_ok(species, world, x, y, pos, players) {
+                continue;
+            }
+            // Lobos nascem em alcateia: o primeiro e até dois em volta.
+            let pack = if species == Species::Wolf { 3 } else { 1 };
+            for member in 0..pack {
+                let at = if member == 0 {
+                    pos
+                } else {
+                    pos + vec2(rng.range(-40.0, 40.0), rng.range(-40.0, 40.0))
+                };
+                let (tx, ty) = ((at.x / TILE).floor() as i32, (at.y / TILE).floor() as i32);
+                if alive >= species.population_cap() || (member > 0 && !spawn_ok(species, world, tx, ty, at, players)) {
+                    continue;
+                }
+                let mut c = Creature::new(species, at).with_level(roll_level(rng));
                 c.id = *next_id;
                 *next_id += 1;
                 creatures.push(c);
@@ -1196,7 +1284,7 @@ mod tests {
             fly(Species::Argentavis) > fastest_ground * 1.4,
             "argentavis voando > raptor montado"
         );
-        for s in Species::ALL.into_iter().filter(|&s| s != Species::Argentavis) {
+        for s in [Species::Pteranodon, Species::Raptor, Species::Smilodon] {
             assert!(Species::Argentavis.carry_weight() > s.carry_weight(), "{s:?}");
         }
         assert!(Species::Pteranodon.saddle().is_some() && Species::Argentavis.saddle().is_some());
@@ -1252,6 +1340,72 @@ mod tests {
         let events = run(&mut argy, &world, pos + vec2(30.0, 0.0), 3.0);
         assert!(events.iter().any(|e| matches!(e, Event::Bite { target: 0, .. })));
         assert!(!argy.flying, "pousado ao morder quem está no chão");
+    }
+
+    /// Um ponto de neve livre, com espaço em volta.
+    fn open_snow(world: &World, species: Species) -> Vec2 {
+        let size = world.size_px();
+        let mut p = vec2(TILE * 1.5, TILE * 1.5);
+        while p.y < size.y {
+            let free = [vec2(0.0, 0.0), vec2(50.0, 0.0), vec2(-50.0, 0.0)]
+                .iter()
+                .all(|&o| species.can_stand(world, p + o) && world.tile_at(p + o) == Tile::Snow);
+            if free {
+                return p;
+            }
+            p.x += TILE;
+            if p.x > size.x {
+                p = vec2(TILE * 1.5, p.y + TILE);
+            }
+        }
+        panic!("sem neve livre");
+    }
+
+    #[test]
+    fn mammoth_ignores_passersby_but_fights_back() {
+        let world = world();
+        let pos = open_snow(&world, Species::Mammoth);
+        let mut mammoth = Creature::new(Species::Mammoth, pos);
+        let player = pos + vec2(40.0, 0.0);
+        let calm = run(&mut mammoth, &world, player, 2.0);
+        assert!(
+            calm.is_empty() && mammoth.state != State::Chase,
+            "não ataca quem só passa"
+        );
+        mammoth.take_hit(5.0, 0.0, player);
+        let player = mammoth.pos + vec2(30.0, 0.0);
+        let events = run(&mut mammoth, &world, player, 3.0);
+        assert!(events.iter().any(|e| matches!(e, Event::Bite { .. })), "revida");
+    }
+
+    #[test]
+    fn ice_age_fauna_lives_in_the_snow_and_is_tameable() {
+        for s in [Species::Mammoth, Species::Smilodon, Species::Wolf] {
+            assert!(s.taming_food().is_some(), "{s:?}");
+        }
+        assert_eq!(Species::Mammoth.mount_harvest(), Some(MountHarvest::Wood));
+        assert_eq!(Species::Smilodon.mount_harvest(), Some(MountHarvest::Hide));
+        let world = world();
+        let mut rng = Rng::new(8);
+        let (mut creatures, mut next_id) = (Vec::new(), 1);
+        populate(&mut creatures, &world, &[world.spawn], &mut rng, 5000, &mut next_id);
+        let wolves: Vec<Vec2> = creatures
+            .iter()
+            .filter(|c| c.species == Species::Wolf)
+            .map(|c| c.pos)
+            .collect();
+        assert!(
+            wolves
+                .iter()
+                .any(|a| wolves.iter().any(|b| a != b && a.distance(*b) < 80.0)),
+            "lobos andam em alcateia"
+        );
+        for c in creatures
+            .iter()
+            .filter(|c| c.species.mount_harvest().is_some() || c.species == Species::Wolf)
+        {
+            assert_eq!(world.tile_at(c.pos), Tile::Snow, "{:?}", c.species);
+        }
     }
 
     #[test]

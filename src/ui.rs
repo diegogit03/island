@@ -5,7 +5,7 @@ use macroquad::prelude::*;
 
 use crate::building::Structure;
 use crate::crafting::{self, CraftQueue, MAX_QUEUE, RECIPES, Recipe};
-use crate::creatures::{Command, Creature};
+use crate::creatures::{Command, Creature, MountHarvest};
 use crate::daynight;
 use crate::inventory::{HOTBAR_SIZE, Inventory, Stack};
 use crate::items::ItemId;
@@ -393,8 +393,7 @@ pub fn draw(hud: &Hud) {
         draw_panels(hud);
     } else {
         draw_queue_hud(hud.queue);
-        let bites = hud.mount.is_some_and(|m| m.species.attack().is_some());
-        draw_hotbar(hud.inventory, hud.selected, bites);
+        draw_hotbar(hud.inventory, hud.selected, hud.mount.map(mount_hint));
     }
 }
 
@@ -578,17 +577,30 @@ fn draw_mount_bar(mount: &Creature) {
     draw_rectangle(x, y, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
     draw_rectangle(x, y, w * mount.health_frac(), h, Color::new(0.4, 0.8, 0.4, 1.0));
     draw_rectangle_lines(x, y, w, h, 1.0, BORDER);
+    let load = format!("Carga {:.0}/{:.0}", mount.weight(), mount.max_weight());
+    let color = if mount.overweight() { BAD } else { DIM };
+    shadowed(&load, x + w + 10.0, y + 10.0, 18.0, color);
 }
 
-/// `mounted`: a montaria morde com E / clique.
-fn draw_hotbar(inv: &Inventory, selected: usize, mounted: bool) {
+/// O que E / clique faz montado em `mount`.
+fn mount_hint(mount: &Creature) -> &'static str {
+    match (mount.species.mount_harvest(), mount.species.attack()) {
+        (Some(MountHarvest::Wood), _) => "montado: E / clique morde ou derruba árvores",
+        (Some(MountHarvest::Hide), _) => "montado: E / clique morde ou tira couro de carcaças",
+        (None, Some(_)) => "montado: E / clique morde",
+        (None, None) => "montado",
+    }
+}
+
+/// `mount_hint`: dica de montaria no lugar da do item.
+fn draw_hotbar(inv: &Inventory, selected: usize, mount_hint: Option<&str>) {
     for (i, rect) in hotbar_slots().iter().enumerate() {
         draw_slot(*rect, inv.slots[i], i == selected);
         draw_text((i + 1).to_string(), rect.x + 4.0, rect.y + 14.0, 16.0, DIM);
     }
     if let Some(stack) = inv.slots[selected] {
         let name = match stack.item {
-            _ if mounted => format!("{}  (montado: E / clique morde)", stack.item.name()),
+            _ if mount_hint.is_some() => format!("{}  ({})", stack.item.name(), mount_hint.unwrap_or_default()),
             item if item.structure().is_some() => format!("{}  (clique para posicionar)", item.name()),
             ItemId::Slingshot => format!(
                 "Estilingue  ({} pedras, clique mira no cursor)",
@@ -1207,6 +1219,29 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
             rect_at(-9.0, -7.0, 5.0, 6.0, Color::from_rgba(128, 104, 82, 255));
             line(p(-3.0, 5.0), p(-5.0, 15.0), 2.0, wood_dark);
             line(p(4.0, 5.0), p(6.0, 15.0), 2.0, wood_dark);
+        }
+        ItemId::MammothSaddle => {
+            // Plataforma larga de madeira sobre couro.
+            draw_ellipse(
+                c.x,
+                c.y + 4.0 * u,
+                18.0 * u,
+                8.0 * u,
+                0.0,
+                Color::from_rgba(110, 72, 42, 255),
+            );
+            rect_at(-15.0, -10.0, 30.0, 8.0, wood);
+            line(p(-15.0, -6.0), p(15.0, -6.0), 1.5, wood_dark);
+            line(p(-8.0, 8.0), p(-10.0, 17.0), 2.5, wood_dark);
+            line(p(8.0, 8.0), p(10.0, 17.0), 2.5, wood_dark);
+        }
+        ItemId::SmilodonSaddle => {
+            let leather = Color::from_rgba(150, 104, 60, 255);
+            draw_ellipse(c.x, c.y, 15.0 * u, 8.0 * u, 0.0, leather);
+            rect_at(-11.0, -7.0, 6.0, 7.0, Color::from_rgba(196, 148, 90, 255));
+            line(p(-10.0, -1.0), p(10.0, -1.0), 1.5, Color::from_rgba(226, 200, 160, 255));
+            line(p(-4.0, 6.0), p(-6.0, 15.0), 2.0, wood_dark);
+            line(p(5.0, 6.0), p(7.0, 15.0), 2.0, wood_dark);
         }
         ItemId::ArgentavisSaddle => {
             // Sela grande com fivela de metal.
