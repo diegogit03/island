@@ -20,6 +20,7 @@ use crate::protocol::{
     Command, ContainerRef, CreatureView, DebugCmd, Input, MAX_CHAT_LEN, NetEvent, PlayerId, PlayerView, PopupStyle,
     PrivateState, SlotTarget, Snapshot,
 };
+use crate::raft::{self, Raft, RaftSave};
 use crate::rng::Rng;
 use crate::save::{BagSave, LEGACY_PLAYER, PlayerSave, SaveData};
 use crate::slots;
@@ -48,6 +49,8 @@ pub enum Interaction {
     Structure(usize),
     /// Dino desacordado (domesticação) ou domesticado, pelo `id`.
     Creature(u32),
+    /// Jangada livre, pelo `id`.
+    Raft(u32),
 }
 
 // ---------- Consultas compartilhadas com o cliente (anel de alvo, dicas "[F]") ----------
@@ -101,7 +104,7 @@ pub fn target_ring(world: &World, creatures: &[Creature], target: Target) -> (Ve
     }
 }
 
-pub fn nearest_interaction(world: &World, creatures: &[Creature], p: Vec2) -> Option<Interaction> {
+pub fn nearest_interaction(world: &World, creatures: &[Creature], rafts: &[Raft], p: Vec2) -> Option<Interaction> {
     let bag = world
         .nearest_bag(p, PICKUP_REACH)
         .map(|i| (world.bags[i].pos.distance(p), Interaction::Bag(i)));
@@ -119,7 +122,13 @@ pub fn nearest_interaction(world: &World, creatures: &[Creature], p: Vec2) -> Op
         .map(|c| (c.pos.distance(p) - c.species.radius(), Interaction::Creature(c.id)))
         .filter(|(d, _)| *d <= building::INTERACT_REACH + 6.0)
         .min_by(|a, b| a.0.total_cmp(&b.0));
-    [bag, structure, creature]
+    let raft = rafts
+        .iter()
+        .filter(|r| r.rider.is_none())
+        .map(|r| (r.pos.distance(p) - raft::RADIUS, Interaction::Raft(r.id)))
+        .filter(|(d, _)| *d <= raft::STEP_REACH - raft::RADIUS)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    [bag, structure, creature, raft]
         .into_iter()
         .flatten()
         .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -154,6 +163,8 @@ pub struct PlayerState {
     pub container: Option<ContainerRef>,
     /// `id` da criatura montada.
     pub mount: Option<u32>,
+    /// `id` da jangada em que está remando.
+    pub raft: Option<u32>,
     pub dead: bool,
     pub input: Input,
 }
@@ -172,6 +183,7 @@ impl PlayerState {
             held: None,
             container: None,
             mount: None,
+            raft: None,
             dead: false,
             input: Input::default(),
         }
@@ -245,6 +257,7 @@ impl PlayerState {
             container: self.container,
             dead: self.dead,
             mount: self.mount,
+            raft: self.raft,
         }
     }
 }
@@ -255,11 +268,13 @@ pub struct Sim {
     pub world: World,
     pub creatures: Vec<Creature>,
     pub projectiles: Vec<Projectile>,
+    pub rafts: Vec<Raft>,
     pub players: Vec<PlayerState>,
     pub time: f32,
     /// Jogadores que saíram (voltam com o mesmo estado ao entrar com o mesmo nome).
     offline: Vec<PlayerSave>,
     next_creature_id: u32,
+    next_raft_id: u32,
     next_player_id: PlayerId,
     rng: Rng,
     spawn_timer: f32,
@@ -287,10 +302,12 @@ impl Sim {
             world,
             creatures,
             projectiles: Vec::new(),
+            rafts: Vec::new(),
             players: Vec::new(),
             time: 0.0,
             offline: Vec::new(),
             next_creature_id,
+            next_raft_id: 1,
             next_player_id: 1,
             rng,
             spawn_timer: RESPAWN_SECS,
@@ -344,6 +361,11 @@ impl Sim {
                 }
             }
         }
+        sim.rafts = data.rafts.iter().map(Raft::from).collect();
+        for r in &mut sim.rafts {
+            r.rider = None;
+        }
+        sim.next_raft_id = sim.rafts.iter().map(|r| r.id).max().unwrap_or(0) + 1;
         sim.offline = data.players;
         sim
     }
@@ -363,6 +385,14 @@ impl Sim {
         data.creatures = Some(self.creatures.iter().map(CreatureSave::from).collect());
         data.players = self.players.iter().map(PlayerState::to_save).collect();
         data.players.extend(self.offline.iter().cloned());
+        data.rafts = self
+            .rafts
+            .iter()
+            .map(|r| RaftSave {
+                rider: None,
+                ..RaftSave::from(r)
+            })
+            .collect();
         data
     }
 
@@ -417,6 +447,7 @@ impl Sim {
     pub fn leave(&mut self, id: PlayerId) {
         let Some(pi) = self.index(id) else { return };
         self.dismount(pi);
+        self.abandon_raft(pi);
         self.close_container(pi);
         let p = self.players.remove(pi);
         self.offline.retain(|s| s.name != p.name);
@@ -583,6 +614,8 @@ impl Sim {
         let dir = Vec2::from(input.dir);
         if self.players[pi].mount.is_some() {
             self.update_riding(pi, dir, input, dt);
+        } else if self.players[pi].raft.is_some() {
+            self.update_rafting(pi, dir, input, dt);
         } else {
             let p = &mut self.players[pi];
             let sprinting = dir != Vec2::ZERO && input.sprint && p.vitals.can_sprint();
@@ -833,9 +866,31 @@ impl Sim {
         }
         c.mounted = true;
         let pos = c.pos;
+        self.release_raft(pi);
         let p = &mut self.players[pi];
         p.mount = Some(id);
         p.player.pos = pos;
+    }
+
+    /// Onde o jogador pisa ao descer de uma montaria em `pos`: ao lado dela ou na margem perto.
+    fn step_off_spot(&self, pos: Vec2, radius: f32, facing_left: bool) -> Option<Vec2> {
+        let side = if facing_left { 1.0 } else { -1.0 };
+        let spots = [vec2(side, 0.0), vec2(-side, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)];
+        spots
+            .iter()
+            .map(|d| pos + *d * (radius + player::RADIUS + 4.0))
+            .find(|&p| !self.world.blocked(p, player::RADIUS))
+            .or_else(|| raft::shore_spot(&self.world, pos))
+    }
+
+    /// Jangada livre perto de `pos` (para descer de uma montaria no meio do mar).
+    fn free_raft_near(&self, pos: Vec2) -> Option<usize> {
+        self.rafts
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.rider.is_none() && r.pos.distance(pos) <= raft::STEP_REACH * 1.5)
+            .min_by(|a, b| a.1.pos.distance(pos).total_cmp(&b.1.pos.distance(pos)))
+            .map(|(i, _)| i)
     }
 
     /// Desce da montaria para um lugar livre ao lado dela. No ar, a montaria pousa no chão livre
@@ -855,14 +910,102 @@ impl Sim {
             c.flying = false;
         }
         c.mounted = false;
-        let (pos, r) = (c.pos, c.species.radius());
-        let side = if c.facing_left { 1.0 } else { -1.0 };
-        let spots = [vec2(side, 0.0), vec2(-side, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)];
-        let free = spots
-            .iter()
-            .map(|d| pos + *d * (r + player::RADIUS + 4.0))
-            .find(|&p| !self.world.blocked(p, player::RADIUS));
-        self.players[pi].player.pos = free.unwrap_or(pos);
+        let (pos, r, left) = (c.pos, c.species.radius(), c.facing_left);
+        // No mar: ao lado, na margem perto, numa jangada perto ou, em último caso, na terra mais próxima.
+        if let Some(spot) = self.step_off_spot(pos, r, left) {
+            self.players[pi].player.pos = spot;
+        } else if let Some(i) = self.free_raft_near(pos) {
+            self.board_raft(pi, i);
+        } else {
+            self.players[pi].player.pos = pos;
+            self.rescue_player(pi);
+        }
+    }
+
+    // ---------- Jangada ----------
+
+    /// Põe a jangada da mão na água perto do jogador e sobe nela.
+    fn launch_raft(&mut self, pi: usize) {
+        let p = &self.players[pi];
+        if p.mount.is_some() || p.raft.is_some() {
+            return;
+        }
+        let Some(spot) = raft::launch_spot(&self.world, p.player.pos) else {
+            self.notify(pi, "Chegue na beira da água para pôr a jangada");
+            return;
+        };
+        let p = &mut self.players[pi];
+        p.inventory.take_from_slot(p.hotbar_selected, 1);
+        let id = self.next_raft_id;
+        self.next_raft_id += 1;
+        self.rafts.push(Raft::new(id, spot));
+        self.board_raft(pi, self.rafts.len() - 1);
+    }
+
+    fn board_raft(&mut self, pi: usize, i: usize) {
+        if self.rafts[i].rider.is_some() || self.players[pi].mount.is_some() {
+            return;
+        }
+        self.release_raft(pi);
+        self.close_container(pi);
+        let raft = &mut self.rafts[i];
+        raft.rider = Some(self.players[pi].id);
+        let (id, pos) = (raft.id, raft.pos);
+        let p = &mut self.players[pi];
+        p.raft = Some(id);
+        p.player.pos = pos;
+    }
+
+    /// F na jangada sem nada por perto: desce para a margem (só perto dela).
+    fn leave_raft(&mut self, pi: usize) {
+        let pos = self.players[pi].player.pos;
+        let Some(spot) = raft::shore_spot(&self.world, pos) else {
+            self.notify(pi, "Chegue perto da margem para descer da jangada");
+            return;
+        };
+        self.release_raft(pi);
+        self.players[pi].player.pos = spot;
+    }
+
+    /// Larga a jangada sem mover o jogador.
+    fn release_raft(&mut self, pi: usize) {
+        if let Some(id) = self.players[pi].raft.take()
+            && let Some(r) = self.rafts.iter_mut().find(|r| r.id == id)
+        {
+            r.rider = None;
+        }
+    }
+
+    /// Morte ou saída do jogo na jangada: ela fica na água e o jogador vai para a terra mais próxima.
+    fn abandon_raft(&mut self, pi: usize) {
+        if self.players[pi].raft.is_some() {
+            self.release_raft(pi);
+            self.rescue_player(pi);
+        }
+    }
+
+    fn update_rafting(&mut self, pi: usize, dir: Vec2, input: Input, dt: f32) {
+        let Some(id) = self.players[pi].raft else { return };
+        let world = &self.world;
+        let Some(raft) = self.rafts.iter_mut().find(|r| r.id == id) else {
+            self.players[pi].raft = None;
+            return;
+        };
+        let p = &mut self.players[pi];
+        // Shift rema mais rápido gastando stamina.
+        let rowing = dir != Vec2::ZERO && input.sprint && p.vitals.can_sprint();
+        let speed = raft::SPEED * if rowing { raft::SPRINT_MULT } else { 1.0 };
+        raft.steer(world, dir, speed, dt);
+        p.player.pos = raft.pos;
+        p.player.update(Vec2::ZERO, 1.0, world, dt);
+        if dir.x.abs() > 0.05 {
+            p.player.facing = if dir.x < 0.0 { Facing::Left } else { Facing::Right };
+        }
+        p.vitals.tick(dt, rowing && raft.moving);
+        // Na jangada dá para bater, atirar e beber.
+        if input.attack && p.player.cooldown <= 0.0 {
+            self.swing(pi);
+        }
     }
 
     fn update_riding(&mut self, pi: usize, dir: Vec2, input: Input, dt: f32) {
@@ -1176,6 +1319,10 @@ impl Sim {
 
     /// Usa o item da hotbar selecionado (por enquanto: comer).
     fn use_selected(&mut self, pi: usize) {
+        if self.players[pi].equipped() == Some(ItemId::Raft) {
+            self.launch_raft(pi);
+            return;
+        }
         let p = &mut self.players[pi];
         let Some(item) = p.equipped() else { return };
         let Some(effect) = item.food_effect() else { return };
@@ -1262,6 +1409,11 @@ impl Sim {
                 self.close_container(pi);
                 self.players[pi].container = Some(ContainerRef::Creature(id));
             }
+            Interaction::Raft(id) => {
+                if let Some(i) = self.rafts.iter().position(|r| r.id == id) {
+                    self.board_raft(pi, i);
+                }
+            }
         }
     }
 
@@ -1341,6 +1493,7 @@ impl Sim {
         }
         self.players[pi].dead = true;
         self.dismount(pi);
+        self.abandon_raft(pi);
         self.close_container(pi);
         let p = &mut self.players[pi];
         // A fila é cancelada: os materiais voltam e vão junto para a bolsa.
@@ -1429,19 +1582,27 @@ impl Sim {
                     .mount
                     .and_then(|id| self.creatures.iter_mut().find(|c| c.id == id));
                 if let Some(mount) = mount {
-                    if mount.try_land(world) {
-                        self.dismount(pi);
-                    } else {
+                    if !mount.try_land(world) {
                         self.notify(pi, "Pouse antes de descer (Espaço)".to_owned());
+                        return;
+                    }
+                    let (pos, r, left) = (mount.pos, mount.species.radius(), mount.facing_left);
+                    if self.step_off_spot(pos, r, left).is_none() && self.free_raft_near(pos).is_none() {
+                        self.notify(pi, "Chegue perto da margem ou de uma jangada para descer");
+                    } else {
+                        self.dismount(pi);
                     }
                 } else if let Some(target) =
-                    nearest_interaction(&self.world, &self.creatures, self.players[pi].player.pos)
+                    nearest_interaction(&self.world, &self.creatures, &self.rafts, self.players[pi].player.pos)
                 {
                     self.interact(pi, target);
+                } else if self.players[pi].raft.is_some() {
+                    self.leave_raft(pi);
                 }
             }
             Command::Place { tile } => {
                 if self.players[pi].mount.is_none()
+                    && self.players[pi].raft.is_none()
                     && let Err(e) = self.place_selected_at(pi, tile)
                 {
                     self.notify(pi, e.message());
@@ -1555,6 +1716,7 @@ impl Sim {
                 .map(|c| CreatureView::new(c, Some(c.id) == open_creature || Some(c.id) == me.mount))
                 .collect(),
             projectiles: self.projectiles.iter().map(|p| p.pos.into()).collect(),
+            rafts: self.rafts.iter().map(RaftSave::from).collect(),
             players: self.players.iter().map(PlayerState::view).collect(),
             me: me.private(),
         })
@@ -1836,6 +1998,48 @@ impl Sim {
             }
         }
         self.mount_creature(0, sarco);
+    }
+
+    /// Primeiro jogador numa jangada no mar, com um ictiossauro domesticado ao lado, um megalodonte
+    /// chegando e um mosassauro e um kraken mais longe.
+    pub fn demo_sea(&mut self) {
+        let world = &self.world;
+        let deep = |p: Vec2| world.tile_at(p) == Tile::DeepWater;
+        let Some(spot) = (0..120)
+            .map(|i| world.spawn + vec2(0.0, i as f32 * 16.0))
+            .find(|&p| raft::can_float(world, p) && deep(p) && deep(p + vec2(0.0, 220.0)))
+        else {
+            return;
+        };
+        self.creatures.clear();
+        self.rafts.clear();
+        self.players[0].player.pos = spot;
+        self.players[0].inventory.add(ItemId::Raft, 1);
+        self.players[0].hotbar_selected = 0;
+        self.launch_raft(0);
+        self.players[0].player.facing = Facing::Right;
+        self.demo_tamed(Species::Ichthyosaur, spot + vec2(-70.0, 34.0), 12);
+        let wild = [
+            (Species::Megalodon, vec2(110.0, 50.0), 14),
+            (Species::Mosasaur, vec2(-150.0, 150.0), 20),
+            (Species::Kraken, vec2(170.0, 170.0), 18),
+        ];
+        for (species, offset, level) in wild {
+            let mut c = Creature::new(species, spot + offset).with_level(level);
+            c.facing_left = offset.x > 0.0;
+            self.add_creature(c);
+        }
+    }
+
+    /// Montado num mosassauro em mar aberto, com uma jangada vazia por perto.
+    pub fn demo_sea_ride(&mut self) {
+        self.demo_sea();
+        let mosasaur = self.creatures.iter().position(|c| c.species == Species::Mosasaur);
+        let Some(i) = mosasaur else { return };
+        let pos = self.creatures[i].pos;
+        self.creatures.remove(i);
+        let id = self.demo_tamed(Species::Mosasaur, pos, 24);
+        self.mount_creature(0, id);
     }
 
     /// Painel de carga de um argentavis domesticado.
@@ -2169,6 +2373,92 @@ mod tests {
         }
         assert!(sim.players[0].vitals.health < health, "piranha mordeu");
         assert!(sim.near_water(0), "dá para beber na lagoa");
+    }
+
+    /// Primeiro jogador na beira da água ao sul do spawn, com uma jangada na mão.
+    fn at_the_shore(sim: &mut Sim) -> Vec2 {
+        let shore = (0..60)
+            .map(|i| sim.world.spawn + vec2(0.0, i as f32 * 16.0))
+            .find(|&p| raft::launch_spot(&sim.world, p).is_some() && !sim.world.blocked(p, player::RADIUS))
+            .expect("praia com água");
+        sim.players[0].player.pos = shore;
+        sim.players[0].inventory.add(ItemId::Raft, 1);
+        sim.players[0].hotbar_selected = 0;
+        shore
+    }
+
+    #[test]
+    fn raft_trip_out_to_sea_and_back() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        at_the_shore(&mut sim);
+        sim.command(ids[0], Command::Use);
+        assert_eq!(sim.rafts.len(), 1, "jangada na água");
+        assert_eq!(sim.players[0].raft, Some(sim.rafts[0].id), "já embarcado");
+        assert_eq!(sim.players[0].inventory.count(ItemId::Raft), 0);
+
+        let row = |sim: &mut Sim, dir: [f32; 2], secs: f32| {
+            sim.set_input(
+                ids[0],
+                Input {
+                    dir,
+                    ..Input::default()
+                },
+            );
+            for _ in 0..(secs * 60.0) as usize {
+                sim.tick(1.0 / 60.0);
+            }
+        };
+        row(&mut sim, [0.0, 1.0], 5.0);
+        let pos = sim.players[0].player.pos;
+        assert_eq!(sim.world.tile_at(pos), Tile::DeepWater, "no mar: {pos}");
+        sim.command(ids[0], Command::Interact);
+        assert!(sim.players[0].raft.is_some(), "não desce no meio do mar");
+
+        // Salva com a jangada no mar e volta: a jangada continua lá e o jogador vai para a terra.
+        let saved = sim.to_save();
+        assert_eq!(saved.rafts.len(), 1);
+        let mut loaded = Sim::from_save(saved);
+        loaded.join("Ana");
+        assert_eq!(loaded.rafts.len(), 1);
+        assert!(!loaded.world.blocked(loaded.players[0].player.pos, player::RADIUS));
+
+        row(&mut sim, [0.0, -1.0], 12.0);
+        sim.set_input(ids[0], Input::default());
+        sim.command(ids[0], Command::Interact);
+        assert_eq!(sim.players[0].raft, None, "desceu na margem");
+        assert!(!sim.world.blocked(sim.players[0].player.pos, player::RADIUS));
+        assert_eq!(sim.rafts[0].rider, None);
+        sim.command(ids[0], Command::Interact);
+        assert!(sim.players[0].raft.is_some(), "F perto da jangada sobe de novo");
+    }
+
+    #[test]
+    fn sea_mount_drops_its_rider_on_a_nearby_raft() {
+        let (mut sim, ids) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        at_the_shore(&mut sim);
+        sim.command(ids[0], Command::Use);
+        sim.set_input(
+            ids[0],
+            Input {
+                dir: [0.0, 1.0],
+                ..Input::default()
+            },
+        );
+        for _ in 0..150 {
+            sim.tick(1.0 / 60.0);
+        }
+        sim.set_input(ids[0], Input::default());
+        let raft_pos = sim.rafts[0].pos;
+        let shark = sim.demo_tamed(Species::Megalodon, raft_pos + vec2(45.0, 0.0), 1);
+        assert!(Species::Megalodon.can_stand(&sim.world, raft_pos + vec2(45.0, 0.0)));
+        sim.mount_creature(0, shark);
+        assert_eq!(sim.players[0].mount, Some(shark));
+        assert_eq!(sim.players[0].raft, None, "saiu da jangada para montar");
+        sim.command(ids[0], Command::Interact);
+        assert_eq!(sim.players[0].mount, None);
+        assert_eq!(sim.players[0].raft, Some(sim.rafts[0].id), "desceu na jangada");
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! Voadores (pteranodonte, argentavis) decolam para se mover e pousam ao parar; no ar ignoram
 //! árvores, pedras e construções. Fauna da era do gelo (mamute, smilodon, lobo) vive na neve, ao norte.
 //! Mamute e smilodon montados coletam (madeira / couro). No pântano (leste): anfíbios (beelzebufo,
-//! sarcosuchus, titanoboa) andam na lama e nadam nas lagoas; piranhas vivem só nas lagoas, em cardume. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
+//! sarcosuchus, titanoboa) andam na lama e nadam nas lagoas; piranhas vivem só nas lagoas, em cardume.
+//! No mar: megalodonte, ictiossauro, mosassauro e kraken (os dois últimos em mar aberto), todos montáveis. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,10 @@ pub enum Species {
     Sarcosuchus,
     Titanoboa,
     Piranha,
+    Megalodon,
+    Ichthyosaur,
+    Mosasaur,
+    Kraken,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +78,8 @@ pub enum Terrain {
     Amphibious,
     /// Só lagoas do pântano.
     Water,
+    /// Mar (água rasa e funda); selvagens ficam na funda.
+    Sea,
 }
 
 /// Duração e altura (em `altitude`) do salto do beelzebufo.
@@ -90,7 +97,7 @@ pub enum MountHarvest {
 }
 
 impl Species {
-    pub const ALL: [Species; 13] = [
+    pub const ALL: [Species; 17] = [
         Species::Dodo,
         Species::Trilobite,
         Species::Dilophosaur,
@@ -104,6 +111,10 @@ impl Species {
         Species::Sarcosuchus,
         Species::Titanoboa,
         Species::Piranha,
+        Species::Megalodon,
+        Species::Ichthyosaur,
+        Species::Mosasaur,
+        Species::Kraken,
     ];
 
     pub fn name(self) -> &'static str {
@@ -121,17 +132,24 @@ impl Species {
             Species::Sarcosuchus => "Sarcosuchus",
             Species::Titanoboa => "Titanoboa",
             Species::Piranha => "Piranha",
+            Species::Megalodon => "Megalodonte",
+            Species::Ichthyosaur => "Ictiossauro",
+            Species::Mosasaur => "Mosassauro",
+            Species::Kraken => "Kraken",
         }
     }
 
     pub fn temperament(self) -> Temperament {
         match self {
-            Species::Dodo | Species::Trilobite | Species::Pteranodon | Species::Beelzebufo => Temperament::Passive,
+            Species::Dodo | Species::Trilobite | Species::Pteranodon | Species::Beelzebufo | Species::Ichthyosaur => {
+                Temperament::Passive
+            }
             Species::Dilophosaur | Species::Raptor | Species::Argentavis | Species::Smilodon | Species::Wolf => {
                 Temperament::Aggressive
             }
             Species::Mammoth => Temperament::Territorial,
             Species::Sarcosuchus | Species::Titanoboa | Species::Piranha => Temperament::Aggressive,
+            Species::Megalodon | Species::Mosasaur | Species::Kraken => Temperament::Aggressive,
         }
     }
 
@@ -152,6 +170,7 @@ impl Species {
         match self {
             Species::Beelzebufo | Species::Sarcosuchus | Species::Titanoboa => Terrain::Amphibious,
             Species::Piranha => Terrain::Water,
+            Species::Megalodon | Species::Ichthyosaur | Species::Mosasaur | Species::Kraken => Terrain::Sea,
             _ => Terrain::Land,
         }
     }
@@ -175,6 +194,7 @@ impl Species {
         match self {
             Species::Wolf => 3,
             Species::Piranha => 4,
+            Species::Ichthyosaur => 2,
             _ => 1,
         }
     }
@@ -195,6 +215,10 @@ impl Species {
             Species::Sarcosuchus => 180.0,
             Species::Titanoboa => 160.0,
             Species::Piranha => 15.0,
+            Species::Megalodon => 200.0,
+            Species::Ichthyosaur => 90.0,
+            Species::Mosasaur => 420.0,
+            Species::Kraken => 320.0,
         }
     }
 
@@ -214,6 +238,10 @@ impl Species {
             Species::Sarcosuchus => 170.0,
             Species::Titanoboa => 140.0,
             Species::Piranha => 15.0,
+            Species::Megalodon => 160.0,
+            Species::Ichthyosaur => 70.0,
+            Species::Mosasaur => 320.0,
+            Species::Kraken => 260.0,
         }
     }
 
@@ -234,6 +262,10 @@ impl Species {
             Species::Sarcosuchus => (40.0, 120.0),
             Species::Titanoboa => (50.0, 130.0),
             Species::Piranha => (60.0, 150.0),
+            Species::Megalodon => (60.0, 210.0),
+            Species::Ichthyosaur => (60.0, 230.0),
+            Species::Mosasaur => (50.0, 160.0),
+            Species::Kraken => (50.0, 175.0),
         }
     }
 
@@ -252,6 +284,10 @@ impl Species {
             Species::Sarcosuchus => 15.0,
             Species::Titanoboa => 14.0,
             Species::Piranha => 5.0,
+            Species::Megalodon => 18.0,
+            Species::Ichthyosaur => 13.0,
+            Species::Mosasaur => 26.0,
+            Species::Kraken => 22.0,
         }
     }
 
@@ -267,6 +303,9 @@ impl Species {
             Species::Sarcosuchus => Some((20.0, 1.5, 14.0, 170.0)),
             Species::Titanoboa => Some((18.0, 1.3, 16.0, 180.0)),
             Species::Piranha => Some((5.0, 0.7, 8.0, 150.0)),
+            Species::Megalodon => Some((22.0, 1.2, 16.0, 260.0)),
+            Species::Mosasaur => Some((35.0, 2.0, 22.0, 220.0)),
+            Species::Kraken => Some((26.0, 1.6, 26.0, 200.0)),
             _ => None,
         }
     }
@@ -280,7 +319,9 @@ impl Species {
             Species::Dilophosaur | Species::Pteranodon | Species::Wolf => 5,
             Species::Raptor | Species::Argentavis | Species::Smilodon => 6,
             Species::Mammoth => 9,
-            Species::Sarcosuchus | Species::Titanoboa => 7,
+            Species::Sarcosuchus | Species::Titanoboa | Species::Megalodon => 7,
+            Species::Ichthyosaur => 5,
+            Species::Mosasaur | Species::Kraken => 10,
         }
     }
 
@@ -295,6 +336,9 @@ impl Species {
                 | Species::Smilodon
                 | Species::Sarcosuchus
                 | Species::Titanoboa
+                | Species::Megalodon
+                | Species::Mosasaur
+                | Species::Kraken
         )
     }
 
@@ -310,7 +354,11 @@ impl Species {
             | Species::Beelzebufo
             | Species::Sarcosuchus
             | Species::Titanoboa
-            | Species::Piranha => Diet::Carnivore,
+            | Species::Piranha
+            | Species::Megalodon
+            | Species::Ichthyosaur
+            | Species::Mosasaur
+            | Species::Kraken => Diet::Carnivore,
         }
     }
 
@@ -330,6 +378,10 @@ impl Species {
             Species::Sarcosuchus => Some(220.0),
             Species::Titanoboa => Some(200.0),
             Species::Piranha => None,
+            Species::Megalodon => Some(240.0),
+            Species::Ichthyosaur => Some(120.0),
+            Species::Mosasaur => Some(400.0),
+            Species::Kraken => Some(320.0),
         }
     }
 
@@ -343,6 +395,10 @@ impl Species {
             Species::Smilodon => Some(ItemId::SmilodonSaddle),
             Species::Beelzebufo => Some(ItemId::BeelzebufoSaddle),
             Species::Sarcosuchus => Some(ItemId::SarcosuchusSaddle),
+            Species::Megalodon => Some(ItemId::MegalodonSaddle),
+            Species::Ichthyosaur => Some(ItemId::IchthyosaurSaddle),
+            Species::Mosasaur => Some(ItemId::MosasaurSaddle),
+            Species::Kraken => Some(ItemId::KrakenSaddle),
             _ => None,
         }
     }
@@ -372,6 +428,10 @@ impl Species {
             Species::Sarcosuchus => 220.0,
             Species::Titanoboa => 120.0,
             Species::Piranha => 10.0,
+            Species::Megalodon => 180.0,
+            Species::Ichthyosaur => 100.0,
+            Species::Mosasaur => 600.0,
+            Species::Kraken => 300.0,
         }
     }
 
@@ -391,6 +451,10 @@ impl Species {
             Species::Sarcosuchus => 14,
             Species::Titanoboa => 10,
             Species::Piranha => 2,
+            Species::Megalodon => 12,
+            Species::Ichthyosaur => 8,
+            Species::Mosasaur => 24,
+            Species::Kraken => 16,
         }
     }
 
@@ -410,6 +474,10 @@ impl Species {
             Species::Sarcosuchus => 5,
             Species::Titanoboa => 4,
             Species::Piranha => 16,
+            Species::Megalodon => 6,
+            Species::Ichthyosaur => 8,
+            Species::Mosasaur => 2,
+            Species::Kraken => 2,
         }
     }
 
@@ -426,16 +494,29 @@ impl Species {
             Species::Mammoth | Species::Smilodon | Species::Wolf => tile == Tile::Snow,
             Species::Beelzebufo | Species::Titanoboa => tile == Tile::Swamp,
             Species::Sarcosuchus | Species::Piranha => tile == Tile::SwampWater,
+            Species::Megalodon | Species::Ichthyosaur => tile == Tile::DeepWater,
+            // Mosassauro e kraken só em mar aberto, longe da costa.
+            Species::Mosasaur | Species::Kraken => [(0, 0), (10, 0), (-10, 0), (0, 10), (0, -10)]
+                .iter()
+                .all(|&(dx, dy)| world.tile(x + dx, y + dy) == Tile::DeepWater),
         }
     }
 
-    /// Onde a criatura pode pisar: terra firme (trilobitas também andam na água rasa).
+    /// Onde a criatura pode ficar, conforme o `terrain` dela (trilobitas também andam na água rasa).
     pub fn can_stand(self, world: &World, pos: Vec2) -> bool {
         let tile = world.tile_at(pos);
         let tile_ok = match self.terrain() {
             Terrain::Land => tile.is_land() || (self == Species::Trilobite && tile == Tile::ShallowWater),
             Terrain::Amphibious => tile.walkable(),
             Terrain::Water => tile == Tile::SwampWater,
+            Terrain::Sea => {
+                // No mar não há nós nem construções: basta o corpo todo na água, dentro do mapa.
+                let r = self.radius();
+                let size = world.size_px();
+                let inside = pos.x >= TILE && pos.y >= TILE && pos.x <= size.x - TILE && pos.y <= size.y - TILE;
+                let probes = [pos, pos + vec2(-r, 0.0), pos + vec2(r, 0.0)];
+                return inside && probes.iter().all(|&p| world.tile_at(p).is_sea());
+            }
         };
         tile_ok && !world.blocked(pos, self.radius())
     }
@@ -1094,6 +1175,9 @@ impl Creature {
             let next = self.pos + axis;
             let free = if self.flying {
                 self.species.can_fly_over(world, next, wild)
+            } else if wild && self.species.terrain() == Terrain::Sea {
+                // Selvagens do mar não entram na água rasa (onde o jogador anda).
+                world.tile_at(next) == Tile::DeepWater && self.species.can_stand(world, next)
             } else {
                 self.species.can_stand(world, next)
             };
@@ -1437,7 +1521,8 @@ mod tests {
     fn pteranodon_is_the_fastest_and_argentavis_carries_the_most() {
         let fly = |s: Species| s.fly_speed().unwrap();
         assert!(fly(Species::Pteranodon) > fly(Species::Argentavis));
-        let fastest_ground = Species::ALL.iter().map(|s| s.speeds().1).fold(0.0, f32::max);
+        let land = Species::ALL.iter().filter(|s| s.terrain() == Terrain::Land);
+        let fastest_ground = land.map(|s| s.speeds().1).fold(0.0, f32::max);
         assert!(
             fly(Species::Argentavis) > fastest_ground * 1.4,
             "argentavis voando > raptor montado"
@@ -1651,6 +1736,41 @@ mod tests {
         assert!(frog.pos.x > tree.x + 9.0, "passou por cima da árvore");
         assert!(!frog.flying && frog.altitude == 0.0);
         assert!(Species::Beelzebufo.can_stand(&world, frog.pos));
+    }
+
+    #[test]
+    fn sea_creatures_stay_in_the_sea() {
+        let world = world();
+        let deep = find_spot(&world, |p| {
+            world.tile_at(p) == Tile::DeepWater && Species::Megalodon.can_stand(&world, p + vec2(0.0, 0.0))
+        });
+        let beach = world.spawn;
+        for s in [
+            Species::Megalodon,
+            Species::Ichthyosaur,
+            Species::Mosasaur,
+            Species::Kraken,
+        ] {
+            assert_eq!(s.terrain(), Terrain::Sea);
+            assert!(!s.can_stand(&world, beach), "{s:?} não sai da água");
+            assert!(
+                s.taming_food().is_some() && s.saddle().is_some(),
+                "{s:?} domesticável e montável"
+            );
+        }
+        assert!(Species::Megalodon.can_stand(&world, deep));
+        assert!(!Species::Raptor.can_stand(&world, deep));
+        // Selvagem perseguindo alguém na água rasa não sai da funda.
+        let mut shark = Creature::new(Species::Megalodon, deep);
+        let shallow = find_spot(&world, |p| world.tile_at(p) == Tile::ShallowWater);
+        run(&mut shark, &world, shallow, 5.0);
+        assert_eq!(world.tile_at(shark.pos), Tile::DeepWater);
+        let mut rng = Rng::new(3);
+        let (mut creatures, mut next_id) = (Vec::new(), 1);
+        populate(&mut creatures, &world, &[world.spawn], &mut rng, 5000, &mut next_id);
+        for c in creatures.iter().filter(|c| c.species.terrain() == Terrain::Sea) {
+            assert_eq!(world.tile_at(c.pos), Tile::DeepWater, "{:?}", c.species);
+        }
     }
 
     #[test]

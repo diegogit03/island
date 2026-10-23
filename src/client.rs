@@ -15,6 +15,7 @@ use crate::player::{self, Facing, Player};
 use crate::protocol::{
     ClientMsg, Command, ContainerRef, Input, MAX_CHAT_LEN, NetEvent, PlayerId, PlayerView, ServerMsg, Snapshot,
 };
+use crate::raft::Raft;
 use crate::render::{self, Avatar, POPUP_LIFETIME, Popup};
 use crate::sim::{self, Interaction, MAP_SIZE};
 use crate::ui::{self, ChatLine, ContainerView, UiAction, UiState};
@@ -54,6 +55,8 @@ pub struct Client {
     snap: Option<Snapshot>,
     creatures: Vec<Creature>,
     creature_targets: HashMap<u32, Vec2>,
+    rafts: Vec<Raft>,
+    raft_targets: HashMap<u32, Vec2>,
     remotes: Vec<Remote>,
     projectiles: Vec<Vec2>,
     pub ui: UiState,
@@ -82,6 +85,8 @@ impl Client {
             snap: None,
             creatures: Vec::new(),
             creature_targets: HashMap::new(),
+            rafts: Vec::new(),
+            raft_targets: HashMap::new(),
             remotes: Vec::new(),
             projectiles: Vec::new(),
             ui: UiState::default(),
@@ -198,6 +203,18 @@ impl Client {
         }
         self.creatures = creatures;
 
+        let mut rafts: Vec<Raft> = s.rafts.iter().map(Raft::from).collect();
+        self.raft_targets.clear();
+        for r in &mut rafts {
+            self.raft_targets.insert(r.id, r.pos);
+            if let Some(old) = self.rafts.iter().find(|o| o.id == r.id)
+                && old.pos.distance(r.pos) < SNAP_DISTANCE
+            {
+                r.pos = old.pos;
+            }
+        }
+        self.rafts = rafts;
+
         self.remotes = s
             .players
             .iter()
@@ -275,6 +292,11 @@ impl Client {
         for c in &mut self.creatures {
             if let Some(target) = self.creature_targets.get(&c.id) {
                 c.pos = c.pos.lerp(*target, k);
+            }
+        }
+        for r in &mut self.rafts {
+            if let Some(target) = self.raft_targets.get(&r.id) {
+                r.pos = r.pos.lerp(*target, k);
             }
         }
         for r in &mut self.remotes {
@@ -564,6 +586,7 @@ impl Client {
         render::draw_entities(&render::Scene {
             world,
             creatures: &self.creatures,
+            rafts: &self.rafts,
             projectiles: &self.projectiles,
             avatars: &avatars,
             local: my.map(|r| r.player.pos),
@@ -595,7 +618,7 @@ impl Client {
         render::draw_popups(&self.popups, &camera);
         if on_foot
             && let Some(r) = my
-            && let Some(target) = sim::nearest_interaction(world, &self.creatures, r.player.pos)
+            && let Some(target) = sim::nearest_interaction(world, &self.creatures, &self.rafts, r.player.pos)
             && let Some((label, pos)) = self.interaction_label(world, target)
         {
             render::draw_prompt(&label, pos, &camera);
@@ -610,6 +633,7 @@ impl Client {
             online: snap.players.len(),
             container: self.container_view(),
             mount: me.mount.and_then(|id| self.creature(id)),
+            on_raft: me.raft.is_some(),
             progression: &me.progression,
             hurt: self.hurt_flash,
             queue: &me.queue,
@@ -636,6 +660,10 @@ impl Client {
                 let r = s.rect();
                 (render::structure_label(s), vec2(r.center().x, r.y - 30.0))
             }
+            Interaction::Raft(id) => {
+                let raft = self.rafts.iter().find(|r| r.id == id)?;
+                ("[F] Subir na jangada".to_owned(), raft.pos - vec2(0.0, 52.0))
+            }
             Interaction::Creature(id) => {
                 let c = self.creature(id)?;
                 if c.knocked_out {
@@ -646,7 +674,7 @@ impl Client {
                 } else {
                     (
                         format!("[F] {} Nv {}", c.species.name(), c.level),
-                        c.pos - vec2(0.0, c.species.radius() * 2.8 + 24.0 + render::lift(c)),
+                        c.pos - vec2(0.0, render::head_height(c) + 24.0),
                     )
                 }
             }

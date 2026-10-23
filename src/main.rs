@@ -15,6 +15,7 @@ mod net;
 mod player;
 mod progression;
 mod protocol;
+mod raft;
 mod render;
 mod rng;
 mod save;
@@ -206,7 +207,8 @@ fn start_session(choice: Choice, name: &str) -> Result<(Connection, Option<Serve
 /// Cenas: ISLAND_SHOT_INVENTORY, _DEAD, _BUILD, _HOUR=22, _CREATURES, _FIRE, _TAME, _RIDE, _PET,
 /// _MOUNTAIN, _COOP (um segundo jogador "Bia" ao lado, com mensagem no chat), _FLY (voando de
 /// pteranodonte com um argentavis), _CARGO (painel de carga do argentavis), _ICE (bioma de gelo,
-/// montado num mamute) e _SWAMP (pântano, montado num sarcosuchus entre piranhas).
+/// montado num mamute), _SWAMP (pântano, montado num sarcosuchus entre piranhas), _SEA (jangada no mar
+/// com fauna marinha) e _SEA_RIDE (montado num mosassauro).
 /// Com ISLAND_SHOT_JOIN=ip:porta, entra num servidor já rodando em vez de subir um local;
 /// ISLAND_SHOT_MENU mostra o menu principal.
 async fn screenshot(path: &str) {
@@ -257,6 +259,12 @@ async fn screenshot(path: &str) {
         }
         if env("ISLAND_SHOT_SWAMP").is_some() {
             sim.demo_swamp();
+        }
+        if env("ISLAND_SHOT_SEA").is_some() {
+            sim.demo_sea();
+        }
+        if env("ISLAND_SHOT_SEA_RIDE").is_some() {
+            sim.demo_sea_ride();
         }
         if env("ISLAND_SHOT_FIRE").is_some() {
             sim.build_demo_base();

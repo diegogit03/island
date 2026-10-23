@@ -37,6 +37,11 @@ impl Tile {
         )
     }
 
+    /// Mar: água rasa ou funda (as lagoas do pântano não contam).
+    pub fn is_sea(self) -> bool {
+        matches!(self, Tile::DeepWater | Tile::ShallowWater)
+    }
+
     pub fn is_water(self) -> bool {
         matches!(self, Tile::DeepWater | Tile::ShallowWater | Tile::SwampWater)
     }
@@ -366,9 +371,11 @@ impl World {
     /// Um círculo de raio `radius` centrado em `pos` colide com água funda ou com algum nó sólido?
     pub fn blocked(&self, pos: Vec2, radius: f32) -> bool {
         let probes = [pos, pos + vec2(-radius, 0.0), pos + vec2(radius, 0.0)];
-        if probes.iter().any(|&p| !self.tile_at(p).walkable()) {
-            return true;
-        }
+        probes.iter().any(|&p| !self.tile_at(p).walkable()) || self.solid(pos, radius)
+    }
+
+    /// Bate em algum nó sólido ou construção (a água não conta: pedras voam por cima dela).
+    pub fn solid(&self, pos: Vec2, radius: f32) -> bool {
         let node_hit = self.nodes.iter().any(|n| {
             let r = n.kind.collision_radius();
             r > 0.0 && n.is_alive() && n.pos.distance_squared(pos) < (r + radius).powi(2)

@@ -9,11 +9,12 @@ use crate::creatures::{Creature, CreatureSave, State};
 use crate::inventory::{Inventory, Stack};
 use crate::items::ItemId;
 use crate::progression::{Attribute, Progression};
+use crate::raft::RaftSave;
 use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -176,6 +177,8 @@ pub struct PrivateState {
     pub container: Option<ContainerRef>,
     pub dead: bool,
     pub mount: Option<u32>,
+    /// `id` da jangada em que está remando.
+    pub raft: Option<u32>,
 }
 
 /// Criatura como o cliente precisa para desenhar.
@@ -254,6 +257,7 @@ pub struct Snapshot {
     pub structures: Vec<Structure>,
     pub creatures: Vec<CreatureView>,
     pub projectiles: Vec<[f32; 2]>,
+    pub rafts: Vec<RaftSave>,
     pub players: Vec<PlayerView>,
     pub me: PrivateState,
 }

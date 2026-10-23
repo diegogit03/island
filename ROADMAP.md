@@ -82,6 +82,10 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - **Titanoboa** (agressiva, domesticável, não montável)
   - **Piranhas** em cardume nas lagoas (não domesticáveis): cuidado ao entrar na água
   - Anfíbios andam na lama e nadam nas lagoas (e na água rasa do mar); bichos de terra não entram
+- ✅ Expansão aquática (mar):
+  - **Jangada**: fabricada sem bancada, posta na água com o botão direito; F sobe/desce (só perto da margem), Shift rema mais rápido; dá para bater, atirar e beber de cima dela
+  - **Ictiossauro** (passivo, o mais rápido no mar), **Megalodonte** (agressivo), **Kraken** e **Mosassauro** (agressivos, em mar aberto, longe da costa): todos domesticáveis e montáveis com sela
+  - Selvagens do mar ficam na água funda; montado no mar, só desce perto da margem ou de uma jangada
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
 - Áudio (macroquad já suporta), menus, opções, rebind de teclas
 - Bioma de selva, cavernas

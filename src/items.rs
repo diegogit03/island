@@ -32,6 +32,11 @@ pub enum ItemId {
     SmilodonSaddle,
     BeelzebufoSaddle,
     SarcosuchusSaddle,
+    MegalodonSaddle,
+    IchthyosaurSaddle,
+    MosasaurSaddle,
+    KrakenSaddle,
+    Raft,
     Campfire,
     Forge,
     Workbench,
@@ -57,7 +62,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 33] = [
+    pub const ALL: [ItemId; 38] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -84,6 +89,11 @@ impl ItemId {
         ItemId::SmilodonSaddle,
         ItemId::BeelzebufoSaddle,
         ItemId::SarcosuchusSaddle,
+        ItemId::MegalodonSaddle,
+        ItemId::IchthyosaurSaddle,
+        ItemId::MosasaurSaddle,
+        ItemId::KrakenSaddle,
+        ItemId::Raft,
         ItemId::Campfire,
         ItemId::Forge,
         ItemId::Workbench,
@@ -122,6 +132,11 @@ impl ItemId {
             ItemId::SmilodonSaddle => "Sela de Smilodon",
             ItemId::BeelzebufoSaddle => "Sela de Beelzebufo",
             ItemId::SarcosuchusSaddle => "Sela de Sarcosuchus",
+            ItemId::MegalodonSaddle => "Sela de Megalodonte",
+            ItemId::IchthyosaurSaddle => "Sela de Ictiossauro",
+            ItemId::MosasaurSaddle => "Sela de Mosassauro",
+            ItemId::KrakenSaddle => "Sela de Kraken",
+            ItemId::Raft => "Jangada",
             ItemId::Campfire => "Fogueira",
             ItemId::Workbench => "Bancada",
             ItemId::StorageBox => "Caixa de Armazenamento",
@@ -149,7 +164,12 @@ impl ItemId {
             | ItemId::MammothSaddle
             | ItemId::SmilodonSaddle
             | ItemId::BeelzebufoSaddle
-            | ItemId::SarcosuchusSaddle => 1,
+            | ItemId::SarcosuchusSaddle
+            | ItemId::MegalodonSaddle
+            | ItemId::IchthyosaurSaddle
+            | ItemId::MosasaurSaddle
+            | ItemId::KrakenSaddle
+            | ItemId::Raft => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
             ItemId::StonePickaxe
@@ -180,6 +200,11 @@ impl ItemId {
             ItemId::SmilodonSaddle => 6.0,
             ItemId::BeelzebufoSaddle => 5.0,
             ItemId::SarcosuchusSaddle => 9.0,
+            ItemId::MegalodonSaddle => 10.0,
+            ItemId::IchthyosaurSaddle => 8.0,
+            ItemId::MosasaurSaddle => 18.0,
+            ItemId::KrakenSaddle => 14.0,
+            ItemId::Raft => 20.0,
             ItemId::WoodWall | ItemId::WoodDoor => 3.0,
             ItemId::WoodFoundation => 4.0,
             ItemId::Campfire => 5.0,

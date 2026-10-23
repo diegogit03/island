@@ -12,6 +12,7 @@ use crate::crafting::CraftQueue;
 use crate::creatures::CreatureSave;
 use crate::inventory::Stack;
 use crate::progression::Progression;
+use crate::raft::RaftSave;
 use crate::vitals::Vitals;
 use crate::world::BagKind;
 
@@ -51,6 +52,8 @@ pub struct SaveData {
     pub creatures: Option<Vec<CreatureSave>>,
     #[serde(default)]
     pub players: Vec<PlayerSave>,
+    #[serde(default)]
+    pub rafts: Vec<RaftSave>,
 
     // ----- Formato v1 (um jogador): só lidos, nunca gravados. -----
     #[serde(default, skip_serializing)]
@@ -80,6 +83,7 @@ impl SaveData {
             structures: Vec::new(),
             creatures: None,
             players: Vec::new(),
+            rafts: Vec::new(),
             player_pos: None,
             facing_left: None,
             vitals: None,

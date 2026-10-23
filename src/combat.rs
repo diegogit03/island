@@ -39,7 +39,7 @@ impl Projectile {
     pub fn update(&mut self, world: &World, dt: f32) -> bool {
         self.pos += self.vel * dt;
         self.ttl -= dt;
-        self.ttl > 0.0 && !world.blocked(self.pos, 1.0)
+        self.ttl > 0.0 && !world.solid(self.pos, 1.0)
     }
 
     /// Acerta um alvo circular?

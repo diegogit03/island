@@ -19,6 +19,7 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Domesticação: derrube dinos com clava ou estilingue, alimente-os desacordados e monte num raptor com sela
 - **Criaturas voadoras**: pteranodonte (o mais rápido) e argentavis (carrega mais peso), montáveis com sela; voe sobre a ilha e o mar
 - Peso de carga dos dinos: carregado demais, o dino fica lento e não decola
+- **Mar**: jangada para navegar e fauna marinha domesticável e montável (megalodonte, ictiossauro, mosassauro e kraken)
 - **Bioma de pântano** no leste: beelzebufo (montado, pula), sarcosuchus (montável, nada rápido) e titanoboa, domesticáveis; lagoas com piranhas
 - **Bioma de gelo** no norte da ilha: mamutes (montados, coletam madeira), smilodons (montados, tiram couro) e lobos-cinzentos em alcateia, todos domesticáveis
 - Criaturas com níveis (1–30)
@@ -44,7 +45,7 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | WASD / setas | Mover |
 | Shift | Correr |
 | E / clique esquerdo | Coletar, atacar (estilingue: mira no cursor); na beira da água, beber; montado: morder (mamute: derrubar árvores; smilodon: tirar couro de carcaças) |
-| R / clique direito | Comer o item selecionado |
+| R / clique direito | Comer o item selecionado; com a jangada na mão, pô-la na água |
 | Clique (estrutura na mão) | Posicionar estrutura |
 | X | Demolir a estrutura sob o cursor |
 | 1–6 / roda do mouse | Selecionar slot da hotbar |

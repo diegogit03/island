@@ -4,10 +4,11 @@
 use macroquad::prelude::*;
 
 use crate::building::{self, Structure, StructureKind};
-use crate::creatures::{Creature, Species, State, Temperament};
+use crate::creatures::{Creature, Species, State, Temperament, Terrain};
 use crate::items::ItemId;
 use crate::player::{Player, SWING_TIME};
 use crate::protocol::PopupStyle;
+use crate::raft::Raft;
 use crate::rng::hash2;
 use crate::ui::draw_item_icon;
 use crate::world::{BagKind, GroundBag, NodeKind, ResourceNode, TILE, Tile, World};
@@ -173,6 +174,7 @@ enum Drawable<'a> {
     Structure(&'a Structure),
     Creature(&'a Creature),
     Avatar(&'a Avatar<'a>),
+    Raft(&'a Raft),
 }
 
 /// Um personagem a desenhar (o próprio jogador ou outro na partida).
@@ -204,6 +206,7 @@ pub fn shirt_color(id: u32) -> Color {
 pub struct Scene<'a> {
     pub world: &'a World,
     pub creatures: &'a [Creature],
+    pub rafts: &'a [Raft],
     /// Pedras em voo.
     pub projectiles: &'a [Vec2],
     /// Personagens vivos.
@@ -226,6 +229,10 @@ fn saddle_height(species: Species) -> f32 {
         Species::Smilodon => 19.0,
         Species::Beelzebufo => 18.0,
         Species::Sarcosuchus => 13.0,
+        Species::Megalodon => 14.0,
+        Species::Ichthyosaur => 13.0,
+        Species::Mosasaur => 19.0,
+        Species::Kraken => 19.0,
         _ => 10.0,
     }
 }
@@ -236,6 +243,19 @@ const FLY_HEIGHT: f32 = 56.0;
 /// Deslocamento vertical do desenho de uma criatura voando.
 pub fn lift(c: &Creature) -> f32 {
     c.altitude * FLY_HEIGHT
+}
+
+/// Altura do topo da criatura acima do pé (barras, nomes, "[F]" e o losango de domesticado).
+/// Bichos do mar são compridos e baixos: o topo fica mais perto do corpo.
+pub fn head_height(c: &Creature) -> f32 {
+    let k = if c.knocked_out {
+        1.4
+    } else if c.species.terrain() == Terrain::Sea {
+        1.2
+    } else {
+        2.8
+    };
+    c.species.radius() * k + lift(c)
 }
 
 /// Voadores bem acima do chão são desenhados depois de tudo (por cima das copas).
@@ -291,6 +311,14 @@ pub fn draw_entities(scene: &Scene) {
             .filter(|c| culled.contains(c.pos) && !high_up(c))
             .map(|c| (c.pos.y, Drawable::Creature(c))),
     );
+    // A jangada vem logo antes de quem está em cima dela (mesmo Y).
+    list.extend(
+        scene
+            .rafts
+            .iter()
+            .filter(|r| culled.contains(r.pos))
+            .map(|r| (r.pos.y - 0.5, Drawable::Raft(r))),
+    );
     // Montado, o personagem é desenhado junto da montaria (logo depois dela).
     list.extend(
         avatars
@@ -315,6 +343,7 @@ pub fn draw_entities(scene: &Scene) {
         let water = match world.tile_at(c.pos) {
             Tile::ShallowWater if c.altitude < 0.1 => Some(SHALLOW_WATER),
             Tile::SwampWater if c.altitude < 0.1 => Some(SWAMP_WATER),
+            Tile::DeepWater if c.altitude < 0.1 => Some(DEEP_WATER),
             _ => None,
         };
         draw_creature(c, time, !high_up(c) && water.is_none(), water);
@@ -334,6 +363,7 @@ pub fn draw_entities(scene: &Scene) {
             Drawable::Structure(s) => draw_structure(s, time),
             Drawable::Creature(c) => draw_with_riders(c),
             Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, 0.0),
+            Drawable::Raft(r) => draw_raft(r, time),
         }
     }
     for c in flyers {
@@ -1017,7 +1047,7 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool, water: Option<Color>) {
     }
     if c.is_tamed() {
         // Marcador de domesticado: losango verde acima da cabeça.
-        let top = vec2(pos.x, pos.y - r * 2.8 - 2.0 - if c.flying { 8.0 } else { 0.0 });
+        let top = vec2(pos.x, c.pos.y - head_height(c) - 2.0 - if c.flying { 8.0 } else { 0.0 });
         draw_poly(top.x, top.y, 4, 3.0, 45.0, Color::new(0.4, 0.95, 0.5, 0.9));
     }
     let tint = |col| hurt_tint(col, c.hurt);
@@ -1059,6 +1089,13 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool, water: Option<Color>) {
             draw_titanoboa(pos, s, wave, &tint);
         }
         Species::Piranha => draw_piranha(pos, s, step, &tint),
+        Species::Megalodon => draw_megalodon(pos, s, step, &tint),
+        Species::Ichthyosaur => draw_ichthyosaur(pos, s, step, &tint),
+        Species::Mosasaur => draw_mosasaur(pos, s, step, &tint),
+        Species::Kraken => {
+            let wave = if c.moving { c.anim_time } else { time * 0.6 };
+            draw_kraken(pos, s, wave, &tint);
+        }
     }
     if let Some(color) = water {
         draw_waterline(pos, r, color, time);
@@ -1072,7 +1109,8 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool, water: Option<Color>) {
         };
         let w = match c.species {
             Species::Mammoth => 20.0,
-            Species::Argentavis | Species::Sarcosuchus => 16.0,
+            Species::Argentavis | Species::Sarcosuchus | Species::Megalodon | Species::Kraken => 16.0,
+            Species::Mosasaur => 20.0,
             _ => 13.0,
         };
         draw_rectangle(x - w / 2.0, y - seat - 5.0, w, 5.5, leather);
@@ -1526,12 +1564,265 @@ fn draw_piranha(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
 
 /// Linha d'água sobre uma criatura nadando: cobre a parte de baixo com a cor da água e marca as ondinhas.
 fn draw_waterline(pos: Vec2, radius: f32, water: Color, time: f32) {
-    let depth = (radius * 0.35).max(4.0);
+    let depth = (radius * 0.2).max(4.0);
     let w = radius * 2.3 + 4.0;
     draw_ellipse(pos.x, pos.y - depth * 0.3, w, depth * 0.8 + 2.0, 0.0, water);
     let ripple = 1.0 + (time * 3.0 + pos.x * 0.05).sin() * 0.08;
     let foam = Color::new(1.0, 1.0, 1.0, 0.35);
     draw_ellipse_lines(pos.x, pos.y - depth, w * ripple, 3.0, 0.0, 1.2, foam);
+}
+
+/// Jangada: toras amarradas com um mastro e uma vela pequena; balança um pouco na água.
+fn draw_raft(r: &Raft, time: f32) {
+    let s = if r.facing_left { -1.0 } else { 1.0 };
+    let bob = (time * 2.2 + r.id as f32).sin();
+    let (x, y) = (r.pos.x, r.pos.y + bob);
+    let ripple = 1.0 + (time * 3.0 + r.id as f32).sin() * 0.05;
+    draw_ellipse_lines(
+        x,
+        y + 3.0,
+        25.0 * ripple,
+        9.0 * ripple,
+        0.0,
+        1.2,
+        Color::new(1.0, 1.0, 1.0, 0.4),
+    );
+    for i in 0..5 {
+        let ly = y - 10.0 + i as f32 * 4.6;
+        let log = if i % 2 == 0 {
+            WOOD_FRONT
+        } else {
+            shade(WOOD_FRONT, 1.15)
+        };
+        draw_rectangle(x - 20.0, ly, 40.0, 4.2, log);
+        for end in [-20.0, 20.0] {
+            draw_circle(x + end, ly + 2.1, 2.1, WOOD_TOP);
+        }
+    }
+    for rx in [-12.0, 12.0] {
+        draw_line(
+            x + rx,
+            y - 11.0,
+            x + rx,
+            y + 12.0,
+            1.5,
+            Color::from_rgba(210, 190, 140, 255),
+        );
+    }
+    let mast = x - 9.0 * s;
+    draw_line(mast, y - 4.0, mast, y - 42.0, 2.5, WOOD_LINE);
+    draw_triangle(
+        vec2(mast + 1.5 * s, y - 40.0),
+        vec2(mast + 1.5 * s, y - 14.0),
+        vec2(mast - 17.0 * s, y - 18.0),
+        Color::from_rgba(236, 226, 196, 255),
+    );
+}
+
+/// Megalodonte: tubarão gigante; a barbatana das costas fica bem fora d'água.
+fn draw_megalodon(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let grey = tint(Color::from_rgba(112, 122, 136, 255));
+    let dark = tint(Color::from_rgba(78, 86, 100, 255));
+    let belly = tint(Color::from_rgba(222, 226, 230, 255));
+    let wag = step * 2.0;
+    draw_triangle(
+        vec2(x - 22.0 * s, y - 8.0),
+        vec2(x - 34.0 * s, y - 22.0 + wag),
+        vec2(x - 29.0 * s, y - 7.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 22.0 * s, y - 6.0),
+        vec2(x - 32.0 * s, y + 3.0 + wag),
+        vec2(x - 29.0 * s, y - 7.0),
+        dark,
+    );
+    draw_ellipse(x, y - 7.0, 26.0, 8.0, 0.0, grey);
+    draw_ellipse(x + 3.0 * s, y - 3.0, 19.0, 3.5, 0.0, belly);
+    draw_triangle(
+        vec2(x - 5.0 * s, y - 13.0),
+        vec2(x + 6.0 * s, y - 13.0),
+        vec2(x - 7.0 * s, y - 30.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x + 5.0 * s, y - 4.0),
+        vec2(x + 12.0 * s, y - 4.0),
+        vec2(x + 1.0 * s, y + 4.0),
+        dark,
+    );
+    for i in 0..3 {
+        let gx = x + (9.0 + i as f32 * 2.5) * s;
+        draw_line(gx, y - 10.0, gx - 1.0 * s, y - 5.0, 1.0, dark);
+    }
+    draw_line(x + 15.0 * s, y - 4.0, x + 25.0 * s, y - 6.0, 1.5, dark);
+    for i in 0..3 {
+        let tx = x + (17.0 + i as f32 * 2.8) * s;
+        draw_triangle(
+            vec2(tx, y - 4.6),
+            vec2(tx + 1.6 * s, y - 4.8),
+            vec2(tx + 0.8 * s, y - 2.6),
+            WHITE,
+        );
+    }
+    draw_circle(x + 19.0 * s, y - 10.0, 1.5, BLACK);
+}
+
+/// Ictiossauro: réptil marinho com cara de golfinho, focinho fino e olho grande.
+fn draw_ichthyosaur(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let blue = tint(Color::from_rgba(92, 130, 170, 255));
+    let dark = tint(Color::from_rgba(62, 92, 128, 255));
+    let belly = tint(Color::from_rgba(208, 222, 234, 255));
+    let wag = step * 2.0;
+    draw_triangle(
+        vec2(x - 15.0 * s, y - 8.0),
+        vec2(x - 25.0 * s, y - 19.0 + wag),
+        vec2(x - 21.0 * s, y - 7.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 15.0 * s, y - 6.0),
+        vec2(x - 25.0 * s, y + 3.0 + wag),
+        vec2(x - 21.0 * s, y - 7.0),
+        dark,
+    );
+    draw_ellipse(x, y - 8.0, 18.0, 6.5, 0.0, blue);
+    draw_ellipse(x + 2.0 * s, y - 4.5, 13.0, 3.0, 0.0, belly);
+    draw_triangle(
+        vec2(x - 4.0 * s, y - 13.0),
+        vec2(x + 3.0 * s, y - 13.0),
+        vec2(x - 6.0 * s, y - 22.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x + 15.0 * s, y - 11.0),
+        vec2(x + 15.0 * s, y - 6.0),
+        vec2(x + 31.0 * s, y - 7.5),
+        blue,
+    );
+    draw_triangle(
+        vec2(x + 4.0 * s, y - 4.0),
+        vec2(x + 9.0 * s, y - 4.0),
+        vec2(x + 1.0 * s, y + 3.0),
+        dark,
+    );
+    draw_circle(x + 12.0 * s, y - 10.0, 2.6, WHITE);
+    draw_circle(x + 12.6 * s, y - 10.0, 1.5, BLACK);
+}
+
+/// Mosassauro: lagartão marinho enorme, com nadadeiras, cauda com barbatana e mandíbula cheia de dentes.
+fn draw_mosasaur(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let teal = tint(Color::from_rgba(62, 98, 108, 255));
+    let dark = tint(Color::from_rgba(40, 66, 74, 255));
+    let belly = tint(Color::from_rgba(192, 196, 170, 255));
+    let wag = step * 3.0;
+    draw_triangle(
+        vec2(x - 22.0 * s, y - 13.0),
+        vec2(x - 22.0 * s, y - 4.0),
+        vec2(x - 50.0 * s, y - 8.0 + wag),
+        teal,
+    );
+    draw_triangle(
+        vec2(x - 44.0 * s, y - 8.0 + wag),
+        vec2(x - 54.0 * s, y - 22.0 + wag),
+        vec2(x - 52.0 * s, y - 8.0 + wag),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 44.0 * s, y - 8.0 + wag),
+        vec2(x - 56.0 * s, y + 2.0 + wag),
+        vec2(x - 52.0 * s, y - 8.0 + wag),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 14.0 * s, y - 5.0),
+        vec2(x - 6.0 * s, y - 5.0),
+        vec2(x - 20.0 * s, y + 5.0),
+        dark,
+    );
+    draw_ellipse(x, y - 10.0, 28.0, 10.0, 0.0, teal);
+    draw_ellipse(x + 2.0 * s, y - 4.5, 22.0, 4.0, 0.0, belly);
+    for i in -4..=3 {
+        let rx = x + i as f32 * 6.0 * s;
+        draw_triangle(
+            vec2(rx - 2.0, y - 18.5),
+            vec2(rx + 2.0, y - 18.5),
+            vec2(rx, y - 22.5),
+            dark,
+        );
+    }
+    draw_triangle(
+        vec2(x + 10.0 * s, y - 5.0),
+        vec2(x + 18.0 * s, y - 5.0),
+        vec2(x + 6.0 * s, y + 6.0),
+        dark,
+    );
+    draw_ellipse(x + 30.0 * s, y - 12.0, 12.0, 6.0, 0.0, teal);
+    draw_triangle(
+        vec2(x + 30.0 * s, y - 10.0),
+        vec2(x + 46.0 * s, y - 11.0),
+        vec2(x + 30.0 * s, y - 5.0),
+        dark,
+    );
+    for i in 0..5 {
+        let tx = x + (32.0 + i as f32 * 2.8) * s;
+        draw_line(tx, y - 10.5, tx, y - 8.8, 1.0, WHITE);
+    }
+    draw_circle(x + 31.0 * s, y - 15.0, 2.0, BLACK);
+}
+
+/// Kraken (lula gigante): manto comprido para trás, olho enorme e tentáculos ondulando para a frente.
+/// `wave`: fase da ondulação dos tentáculos.
+fn draw_kraken(pos: Vec2, s: f32, wave: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let red = tint(Color::from_rgba(178, 62, 84, 255));
+    let dark = tint(Color::from_rgba(126, 36, 58, 255));
+    let light = tint(Color::from_rgba(222, 134, 144, 255));
+    // Tentáculos (dois mais compridos, com "clava" na ponta).
+    for i in 0..8 {
+        let long = i == 2 || i == 5;
+        let reach = if long { 46.0 } else { 28.0 + (i % 3) as f32 * 3.0 };
+        let base = vec2(x + 8.0 * s, y - 9.0 + (i as f32 - 3.5) * 1.6);
+        let mut prev = base;
+        for k in 1..=6 {
+            let t = k as f32 / 6.0;
+            let wiggle = ((wave * 3.0 + i as f32 * 0.9) + t * 4.0).sin() * 3.0 * t;
+            let p = base + vec2(reach * t * s, (i as f32 - 3.5) * 1.8 * t + wiggle);
+            draw_line(prev.x, prev.y, p.x, p.y, 3.0 - t * 1.8, dark);
+            prev = p;
+        }
+        if long {
+            draw_ellipse(prev.x, prev.y, 4.0, 2.5, 0.0, dark);
+        }
+    }
+    draw_triangle(
+        vec2(x - 30.0 * s, y - 12.0),
+        vec2(x - 42.0 * s, y - 24.0),
+        vec2(x - 44.0 * s, y - 10.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 30.0 * s, y - 12.0),
+        vec2(x - 42.0 * s, y - 1.0),
+        vec2(x - 44.0 * s, y - 10.0),
+        dark,
+    );
+    draw_triangle(
+        vec2(x - 6.0 * s, y - 20.0),
+        vec2(x - 6.0 * s, y - 4.0),
+        vec2(x - 40.0 * s, y - 12.0),
+        red,
+    );
+    draw_ellipse(x - 8.0 * s, y - 12.0, 16.0, 8.5, 0.0, red);
+    for (dx, dy) in [(-14.0, -14.0), (-22.0, -11.0), (-6.0, -16.0), (-28.0, -13.0)] {
+        draw_circle(x + dx * s, y + dy, 1.5, light);
+    }
+    draw_circle(x + 6.0 * s, y - 10.0, 8.0, red);
+    draw_circle(x + 7.0 * s, y - 11.0, 4.0, Color::from_rgba(242, 222, 120, 255));
+    draw_circle(x + 8.0 * s, y - 11.0, 2.0, BLACK);
 }
 
 /// Criatura deitada: morta (olho em X) ou desmaiada (olho fechado).
@@ -1551,6 +1842,10 @@ fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
         Species::Sarcosuchus => Color::from_rgba(90, 100, 66, 255),
         Species::Titanoboa => Color::from_rgba(70, 96, 48, 255),
         Species::Piranha => Color::from_rgba(140, 146, 152, 255),
+        Species::Megalodon => Color::from_rgba(104, 114, 128, 255),
+        Species::Ichthyosaur => Color::from_rgba(84, 120, 160, 255),
+        Species::Mosasaur => Color::from_rgba(58, 92, 100, 255),
+        Species::Kraken => Color::from_rgba(160, 56, 78, 255),
     };
     let r = species.radius();
     draw_ellipse(x, y - 4.0, r + 2.0, r * 0.45, 0.0, col);
@@ -1578,8 +1873,7 @@ pub fn draw_creature_bars(creatures: &[Creature], camera: &Camera2D, skip: Optio
         if !hurt && !dazed && !chasing && !c.is_tamed() {
             continue;
         }
-        let height = if c.knocked_out { 1.4 } else { 2.8 };
-        let top = c.pos - vec2(0.0, c.species.radius() * height + 10.0 + lift(c));
+        let top = c.pos - vec2(0.0, head_height(c) + 10.0);
         let at = camera.world_to_screen(top);
         let (w, h) = (44.0, 5.0);
         draw_rectangle(at.x - w / 2.0, at.y, w, h, Color::new(0.0, 0.0, 0.0, 0.6));

@@ -148,6 +148,8 @@ pub struct Hud<'a> {
     pub container: Option<ContainerView<'a>>,
     /// Montaria atual, para a barra de vida dela.
     pub mount: Option<&'a Creature>,
+    /// Remando numa jangada.
+    pub on_raft: bool,
     pub progression: &'a Progression,
     /// Flash vermelho de dano recebido (s restantes).
     pub hurt: f32,
@@ -384,6 +386,16 @@ pub fn draw(hud: &Hud) {
     draw_clock(hud.time, hud.online);
     draw_vitals(hud.vitals);
     draw_xp_bar(hud.progression);
+    if hud.on_raft {
+        let y = screen_height() - 30.0 - 5.0 * 24.0 - 18.0;
+        shadowed(
+            "Jangada   F: descer na margem   Shift: remar mais rápido",
+            16.0,
+            y,
+            18.0,
+            OK,
+        );
+    }
     if let Some(mount) = hud.mount {
         draw_mount_bar(mount);
     }
@@ -611,6 +623,7 @@ fn draw_hotbar(inv: &Inventory, selected: usize, mount_hint: Option<&str>) {
                 inv.count(ItemId::Stone)
             ),
             ItemId::Narcotic => "Narcótico  (coloque no inventário do dino desacordado)".to_owned(),
+            ItemId::Raft => "Jangada  (R / botão direito na beira da água)".to_owned(),
             item => item.name().to_owned(),
         };
         let w = measure_text(&name, None, 20, 1.0).width;
@@ -1265,6 +1278,34 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
             }
             line(p(-8.0, 6.0), p(-10.0, 15.0), 2.0, wood_dark);
             line(p(8.0, 6.0), p(10.0, 15.0), 2.0, wood_dark);
+        }
+        ItemId::Raft => {
+            for i in 0..4 {
+                let ly = -8.0 + i as f32 * 5.0;
+                rect_at(-15.0, ly, 30.0, 4.5, if i % 2 == 0 { wood } else { wood_dark });
+            }
+            line(p(-5.0, -2.0), p(-5.0, -18.0), 2.0, wood_dark);
+            draw_triangle(
+                p(-4.0, -17.0),
+                p(-4.0, -5.0),
+                p(8.0, -7.0),
+                Color::from_rgba(236, 226, 196, 255),
+            );
+        }
+        ItemId::MegalodonSaddle | ItemId::IchthyosaurSaddle | ItemId::MosasaurSaddle | ItemId::KrakenSaddle => {
+            // Selas do mar: couro com fivelas e uma tira colorida por espécie.
+            let (stripe, w) = match item {
+                ItemId::MegalodonSaddle => (Color::from_rgba(112, 122, 136, 255), 16.0),
+                ItemId::IchthyosaurSaddle => (Color::from_rgba(92, 130, 170, 255), 14.0),
+                ItemId::MosasaurSaddle => (Color::from_rgba(62, 98, 108, 255), 19.0),
+                _ => (Color::from_rgba(178, 62, 84, 255), 17.0),
+            };
+            draw_ellipse(c.x, c.y, w * u, 8.0 * u, 0.0, Color::from_rgba(92, 64, 40, 255));
+            line(p(-w, 0.0), p(w, 0.0), 3.0, stripe);
+            rect_at(-w * 0.6, -9.0, 6.0, 7.0, Color::from_rgba(130, 94, 58, 255));
+            rect_at(w * 0.4, -3.0, 4.0, 4.0, Color::from_rgba(150, 150, 160, 255));
+            line(p(-6.0, 7.0), p(-8.0, 16.0), 2.0, wood_dark);
+            line(p(6.0, 7.0), p(8.0, 16.0), 2.0, wood_dark);
         }
         ItemId::ArgentavisSaddle => {
             // Sela grande com fivela de metal.
