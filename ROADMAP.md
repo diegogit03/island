@@ -67,7 +67,7 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Decisão: continuar no macroquad (a rede independe da engine; Bevy exigiria reescrever render e UI)
 - Ainda não: predição no cliente (pensado para LAN; pela internet a latência aparece), tribos separadas e PvP
 
-## 🚧 v0.8 — Conteúdo e polimento
+## 🚧 v0.8 — Expansão dos biomas
 - ✅ Criaturas voadoras montáveis com sela: **pteranodonte** (o mais rápido do jogo, carrega pouco) e **argentavis** (velocidade média, carrega muito; caça e pousa para morder)
   - Espaço decola/pousa; no ar ignora árvores, pedras, construções e água; predadores do chão não alcançam quem voa
   - Pouso forçado em terra ao morrer, sair do jogo ou perder a montaria no ar
@@ -86,15 +86,44 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - **Jangada**: fabricada sem bancada, posta na água com o botão direito; F sobe/desce (só perto da margem), Shift rema mais rápido; dá para bater, atirar e beber de cima dela
   - **Ictiossauro** (passivo, o mais rápido no mar), **Megalodonte** (agressivo), **Kraken** e **Mosassauro** (agressivos, em mar aberto, longe da costa): todos domesticáveis e montáveis com sela
   - Selvagens do mar ficam na água funda; montado no mar, só desce perto da margem ou de uma jangada
+- Bioma de deserto (sugestão: oeste da ilha, o lado ainda livre): areia, dunas, cactos e oásis, com fauna própria
+
+## v0.9 — NPCs e tribos
+- Acampamentos de NPCs espalhados pelo mapa (cabanas e fogueira), onde dá para recrutar NPCs para a sua tribo
+- Membros da tribo com nome, vida e inventário; o jogador dá ferramentas e armas para eles
+- Comandos: seguir, ficar, coletar (madeira, pedra...) e guardar no baú, defender, atacar um alvo
+- NPCs seguem as mesmas regras de coleta e combate do jogador (a simulação no servidor já trata cada um como um agente)
+- Domesticados também passam a lutar junto com o dono e a obedecer aos comandos de combate
+- Multiplayer: a tribo é de quem recrutou; base para as tribos entre jogadores da v1.0
+
+## v0.10 — Construções
+- Tiers de pedra e metal (fundações, paredes, portas), teto e andares
+- Portões grandes (para dinos), janelas e cercas
+- Cama como ponto de respawn, móveis e decoração
+- Vida das estruturas e reparo; criaturas e NPCs hostis atacam bases
+
+## v0.11 — Industrialização
+- Cadeias de produção: moedor, curtume, fornalha industrial, refino de combustível
+- Estações que trabalham sozinhas com combustível; NPCs da tribo operando estações
+- Gerador e energia para máquinas
+- Agricultura: canteiros, sementes e ração para domesticados
+
+## v0.12 — Armas
+- Arco e flechas (inclusive tranquilizantes), besta e lanças de arremesso
+- Armas de fogo simples com munição feita na indústria
+- Armaduras (couro, pele, metal) e escudos
+- Torretas de defesa para a base
+
+## Polimento e conteúdo (depois da v0.12)
 - Sprites pixel art substituindo as primitivas (spritesheets + animações)
 - Áudio (macroquad já suporta), menus, opções, rebind de teclas
 - Bioma de selva, cavernas
-- Frio no bioma de gelo (roupas de pele, fogueira esquenta) e domesticados que lutam junto com o dono
+- Temperatura: frio no gelo e calor no deserto (roupas, fogueira esquenta)
 - Mapa/minimapa, notas exploráveis, chefes simples
 
 ## v1.0+ — MMO
 - Predição no cliente e reconciliação (jogar pela internet, não só LAN), snapshots com delta
-- Tribos (posse de estruturas e dinos por grupo), PvP configurável
+- Tribos entre jogadores (posse de estruturas e dinos por grupo), PvP configurável
 - Servidores persistentes com banco de dados e muitos jogadores
 - Mundos maiores em chunks, várias ilhas
 - Economia entre jogadores, PvE/PvP por servidor

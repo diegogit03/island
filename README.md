@@ -6,7 +6,7 @@
 
 Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, construa, domestique dinossauros e jogue com amigos na rede local. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop.
 
-## O que já tem (v0.7 + início da v0.8)
+## O que já tem (v0.8 — expansão dos biomas; falta o deserto)
 
 - Ilha procedural com praia, água rasa e água funda
 - Coleta de madeira, palha, pedra, sílex e frutinhas
