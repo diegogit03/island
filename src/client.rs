@@ -11,9 +11,10 @@ use crate::daynight;
 use crate::inventory::HOTBAR_SIZE;
 use crate::items::ItemId;
 use crate::net::Connection;
+use crate::npc::NpcView;
 use crate::player::{self, Facing, Player};
 use crate::protocol::{
-    ClientMsg, Command, ContainerRef, Input, MAX_CHAT_LEN, NetEvent, PlayerId, PlayerView, ServerMsg, Snapshot,
+    ClientMsg, Command, ContainerRef, Input, MAX_CHAT_LEN, NetEvent, PlayerId, PlayerView, ServerMsg, Snapshot, Whistle,
 };
 use crate::raft::Raft;
 use crate::render::{self, Avatar, POPUP_LIFETIME, Popup};
@@ -41,6 +42,14 @@ pub enum Status {
     Closed(String),
 }
 
+/// NPC como desenhado: posição suavizada e o rótulo acima da cabeça.
+struct ClientNpc {
+    view: NpcView,
+    body: Player,
+    target: Vec2,
+    label: String,
+}
+
 /// Outro jogador (ou o próprio) como desenhado: posição suavizada.
 struct Remote {
     view: PlayerView,
@@ -57,6 +66,7 @@ pub struct Client {
     creature_targets: HashMap<u32, Vec2>,
     rafts: Vec<Raft>,
     raft_targets: HashMap<u32, Vec2>,
+    npcs: Vec<ClientNpc>,
     remotes: Vec<Remote>,
     projectiles: Vec<Vec2>,
     pub ui: UiState,
@@ -87,6 +97,7 @@ impl Client {
             creature_targets: HashMap::new(),
             rafts: Vec::new(),
             raft_targets: HashMap::new(),
+            npcs: Vec::new(),
             remotes: Vec::new(),
             projectiles: Vec::new(),
             ui: UiState::default(),
@@ -126,6 +137,10 @@ impl Client {
     fn my_view(&self) -> Option<&Remote> {
         let me = self.me?;
         self.remotes.iter().find(|r| r.view.id == me)
+    }
+
+    fn npc_spots(&self) -> Vec<(u32, Vec2)> {
+        self.npcs.iter().map(|n| (n.view.id, n.body.pos)).collect()
     }
 
     fn creature(&self, id: u32) -> Option<&Creature> {
@@ -215,6 +230,36 @@ impl Client {
         }
         self.rafts = rafts;
 
+        self.npcs = s
+            .npcs
+            .iter()
+            .map(|view| {
+                let target = Vec2::from(view.pos);
+                let pos = self
+                    .npcs
+                    .iter()
+                    .find(|n| n.view.id == view.id)
+                    .map(|n| n.body.pos)
+                    .filter(|p| p.distance(target) < SNAP_DISTANCE)
+                    .unwrap_or(target);
+                let mut body = Player::new(pos);
+                body.facing = if view.facing_left { Facing::Left } else { Facing::Right };
+                body.moving = view.moving;
+                body.anim_time = view.anim_time;
+                body.swing_timer = view.swing_timer;
+                let label = match &view.owner {
+                    Some(owner) => format!("{} ({owner})", view.name),
+                    None => view.name.clone(),
+                };
+                ClientNpc {
+                    view: view.clone(),
+                    body,
+                    target,
+                    label,
+                }
+            })
+            .collect();
+
         self.remotes = s
             .players
             .iter()
@@ -301,6 +346,9 @@ impl Client {
         }
         for r in &mut self.remotes {
             r.player.pos = r.player.pos.lerp(r.target, k);
+        }
+        for n in &mut self.npcs {
+            n.body.pos = n.body.pos.lerp(n.target, k);
         }
         if let Some(pos) = self.my_view().map(|r| r.player.pos) {
             let follow = 1.0 - (-10.0 * dt).exp();
@@ -446,6 +494,7 @@ impl Client {
                     Command::Mount
                 }
                 UiAction::SpendAttribute(attr) => Command::SpendAttribute(attr),
+                UiAction::NpcOrder(cmd) => Command::NpcOrder(cmd),
             };
             self.send(cmd);
         }
@@ -487,6 +536,23 @@ impl Client {
             if is_key_pressed(KeyCode::F) {
                 self.send(Command::Interact);
             }
+            // Apitos para a tribo: Z seguir, C ficar, B defender, V atacar o alvo do mouse.
+            let whistle = if is_key_pressed(KeyCode::Z) {
+                Some(Whistle::Follow)
+            } else if is_key_pressed(KeyCode::C) {
+                Some(Whistle::Stay)
+            } else if is_key_pressed(KeyCode::B) {
+                Some(Whistle::Defend)
+            } else if is_key_pressed(KeyCode::V) {
+                Some(Whistle::Attack {
+                    at: self.mouse_world().into(),
+                })
+            } else {
+                None
+            };
+            if let Some(whistle) = whistle {
+                self.send(Command::Whistle(whistle));
+            }
             if mounted && is_key_pressed(KeyCode::Space) {
                 self.send(Command::MountAction);
             }
@@ -518,6 +584,11 @@ impl Client {
         match snap.me.container? {
             ContainerRef::Structure(i) => self.world.as_ref()?.structures.get(i).map(ContainerView::Structure),
             ContainerRef::Creature(id) => self.creature(id).map(ContainerView::Creature),
+            ContainerRef::Npc(id) => self
+                .npcs
+                .iter()
+                .find(|n| n.view.id == id)
+                .map(|n| ContainerView::Npc(&n.view)),
         }
     }
 
@@ -571,7 +642,7 @@ impl Client {
             .filter(|_| on_foot)
             .and_then(|r| sim::find_target(world, &self.creatures, &r.player, self.equipped()))
             .map(|t| sim::target_ring(world, &self.creatures, t));
-        let avatars: Vec<Avatar> = self
+        let mut avatars: Vec<Avatar> = self
             .remotes
             .iter()
             .filter(|r| !r.view.dead)
@@ -580,9 +651,35 @@ impl Client {
                 held: r.view.held,
                 mount: r.view.mount,
                 shirt: render::shirt_color(r.view.id),
+                hair: render::PLAYER_HAIR,
+                band: None,
                 name: (Some(r.view.id) != self.me).then_some(r.view.name.as_str()),
+                health: None,
             })
             .collect();
+        // Membros da tribo usam uma faixa na cor do dono (cinza se ele não estiver no jogo).
+        let tribe_color = |owner: &Option<String>| {
+            owner.as_ref().map(|o| {
+                self.remotes
+                    .iter()
+                    .find(|r| r.view.name == *o)
+                    .map_or(Color::new(0.6, 0.6, 0.6, 1.0), |r| render::shirt_color(r.view.id))
+            })
+        };
+        avatars.extend(self.npcs.iter().map(|n| {
+            let (shirt, hair) = render::npc_look(n.view.look);
+            let frac = n.view.health_frac();
+            Avatar {
+                player: &n.body,
+                held: n.view.held,
+                mount: None,
+                shirt,
+                hair,
+                band: tribe_color(&n.view.owner),
+                name: Some(n.label.as_str()),
+                health: (frac < 1.0).then_some(frac),
+            }
+        }));
         render::draw_entities(&render::Scene {
             world,
             creatures: &self.creatures,
@@ -618,7 +715,8 @@ impl Client {
         render::draw_popups(&self.popups, &camera);
         if on_foot
             && let Some(r) = my
-            && let Some(target) = sim::nearest_interaction(world, &self.creatures, &self.rafts, r.player.pos)
+            && let Some(target) =
+                sim::nearest_interaction(world, &self.creatures, &self.rafts, &self.npc_spots(), r.player.pos)
             && let Some((label, pos)) = self.interaction_label(world, target)
         {
             render::draw_prompt(&label, pos, &camera);
@@ -659,6 +757,14 @@ impl Client {
                 let s = world.structures.get(i)?;
                 let r = s.rect();
                 (render::structure_label(s), vec2(r.center().x, r.y - 30.0))
+            }
+            Interaction::Npc(id) => {
+                let n = self.npcs.iter().find(|n| n.view.id == id)?;
+                let text = match &n.view.owner {
+                    None => format!("[F] Falar com {} (recrutar)", n.view.name),
+                    Some(_) => format!("[F] {}", n.view.name),
+                };
+                (text, n.body.pos - vec2(0.0, 64.0))
             }
             Interaction::Raft(id) => {
                 let raft = self.rafts.iter().find(|r| r.id == id)?;

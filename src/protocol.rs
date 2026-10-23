@@ -8,13 +8,14 @@ use crate::crafting::CraftQueue;
 use crate::creatures::{Creature, CreatureSave, State};
 use crate::inventory::{Inventory, Stack};
 use crate::items::ItemId;
+use crate::npc::{GatherKind, NpcView};
 use crate::progression::{Attribute, Progression};
 use crate::raft::RaftSave;
 use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -30,6 +31,30 @@ pub enum ContainerRef {
     Structure(usize),
     /// `id` da criatura.
     Creature(u32),
+    /// `id` do NPC (morador de acampamento ou membro da tribo).
+    Npc(u32),
+}
+
+/// Apito: ordem para toda a tribo (NPCs e domesticados) perto do jogador.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Whistle {
+    Follow,
+    Stay,
+    Defend,
+    /// Atacar a criatura mais perto deste ponto (o cursor).
+    Attack {
+        at: [f32; 2],
+    },
+}
+
+/// Botões do painel de um NPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NpcCmd {
+    Follow,
+    Stay,
+    Defend,
+    Gather(GatherKind),
+    Recruit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +131,10 @@ pub enum Command {
     MountAction,
     SpendAttribute(Attribute),
     Respawn,
+    /// Ordem para toda a tribo por perto (Z, C, B, V).
+    Whistle(Whistle),
+    /// Ordem para o NPC com o painel aberto (ou recrutá-lo).
+    NpcOrder(NpcCmd),
     Chat(String),
     Save,
     Debug(DebugCmd),
@@ -261,6 +290,7 @@ pub struct Snapshot {
     pub creatures: Vec<CreatureView>,
     pub projectiles: Vec<[f32; 2]>,
     pub rafts: Vec<RaftSave>,
+    pub npcs: Vec<NpcView>,
     pub players: Vec<PlayerView>,
     pub me: PrivateState,
 }

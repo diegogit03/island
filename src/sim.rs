@@ -14,6 +14,7 @@ use crate::daynight;
 use crate::gathering;
 use crate::inventory::{HOTBAR_SIZE, INVENTORY_SIZE, Inventory, Stack};
 use crate::items::{ItemId, ToolKind};
+use crate::npc::{Npc, NpcSave, NpcView};
 use crate::player::{self, Facing, Player};
 use crate::progression::{self, LearnError, Progression};
 use crate::protocol::{
@@ -26,6 +27,8 @@ use crate::save::{BagSave, LEGACY_PLAYER, PlayerSave, SaveData};
 use crate::slots;
 use crate::vitals::{self, Vitals};
 use crate::world::{BagKind, GroundBag, NodeKind, TILE, Tile, World};
+
+mod tribe;
 
 pub const MAP_SIZE: usize = 160;
 pub const PICKUP_REACH: f32 = 28.0;
@@ -53,6 +56,8 @@ pub enum Interaction {
     Creature(u32),
     /// Jangada livre, pelo `id`.
     Raft(u32),
+    /// NPC (morador ou membro da tribo), pelo `id`.
+    Npc(u32),
 }
 
 // ---------- Consultas compartilhadas com o cliente (anel de alvo, dicas "[F]") ----------
@@ -106,7 +111,14 @@ pub fn target_ring(world: &World, creatures: &[Creature], target: Target) -> (Ve
     }
 }
 
-pub fn nearest_interaction(world: &World, creatures: &[Creature], rafts: &[Raft], p: Vec2) -> Option<Interaction> {
+/// `npcs`: (`id`, posição) de cada NPC.
+pub fn nearest_interaction(
+    world: &World,
+    creatures: &[Creature],
+    rafts: &[Raft],
+    npcs: &[(u32, Vec2)],
+    p: Vec2,
+) -> Option<Interaction> {
     let bag = world
         .nearest_bag(p, PICKUP_REACH)
         .map(|i| (world.bags[i].pos.distance(p), Interaction::Bag(i)));
@@ -130,7 +142,12 @@ pub fn nearest_interaction(world: &World, creatures: &[Creature], rafts: &[Raft]
         .map(|r| (r.pos.distance(p) - raft::RADIUS, Interaction::Raft(r.id)))
         .filter(|(d, _)| *d <= raft::STEP_REACH - raft::RADIUS)
         .min_by(|a, b| a.0.total_cmp(&b.0));
-    [bag, structure, creature, raft]
+    let npc = npcs
+        .iter()
+        .map(|&(id, pos)| (pos.distance(p), Interaction::Npc(id)))
+        .filter(|(d, _)| *d <= building::INTERACT_REACH)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    [bag, structure, creature, raft, npc]
         .into_iter()
         .flatten()
         .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -141,11 +158,14 @@ pub fn nearest_interaction(world: &World, creatures: &[Creature], rafts: &[Raft]
 fn container_inventory<'a>(
     world: &'a mut World,
     creatures: &'a mut [Creature],
+    npcs: &'a mut [Npc],
     container: Option<ContainerRef>,
 ) -> Option<&'a mut Inventory> {
     match container? {
         ContainerRef::Structure(i) => world.structures.get_mut(i)?.storage.as_mut(),
         ContainerRef::Creature(id) => creatures.iter_mut().find(|c| c.id == id)?.inventory.as_mut(),
+        // Só membros da tribo (o painel só abre para o dono): moradores não recebem itens.
+        ContainerRef::Npc(id) => Some(&mut npcs.iter_mut().find(|n| n.id == id && n.owner.is_some())?.inventory),
     }
 }
 
@@ -271,12 +291,17 @@ pub struct Sim {
     pub creatures: Vec<Creature>,
     pub projectiles: Vec<Projectile>,
     pub rafts: Vec<Raft>,
+    /// Moradores dos acampamentos e membros das tribos.
+    pub npcs: Vec<Npc>,
     pub players: Vec<PlayerState>,
     pub time: f32,
     /// Jogadores que saíram (voltam com o mesmo estado ao entrar com o mesmo nome).
     offline: Vec<PlayerSave>,
     next_creature_id: u32,
     next_raft_id: u32,
+    next_npc_id: u32,
+    /// Tempo até os acampamentos repovoarem.
+    camp_timer: f32,
     next_player_id: PlayerId,
     rng: Rng,
     spawn_timer: f32,
@@ -300,7 +325,7 @@ impl Sim {
             4000,
             &mut next_creature_id,
         );
-        Self {
+        let mut sim = Self {
             world,
             creatures,
             projectiles: Vec::new(),
@@ -310,12 +335,22 @@ impl Sim {
             offline: Vec::new(),
             next_creature_id,
             next_raft_id: 1,
+            npcs: Vec::new(),
+            next_npc_id: 1,
+            camp_timer: 0.0,
             next_player_id: 1,
             rng,
             spawn_timer: RESPAWN_SECS,
             outbox: Vec::new(),
             chat: Vec::new(),
-        }
+        };
+        sim.populate_camps();
+        sim.camp_timer = 300.0;
+        sim
+    }
+
+    fn npc_spots(&self) -> Vec<(u32, Vec2)> {
+        self.npcs.iter().map(|n| (n.id, n.pos())).collect()
     }
 
     pub fn seed(&self) -> u64 {
@@ -368,6 +403,12 @@ impl Sim {
             r.rider = None;
         }
         sim.next_raft_id = sim.rafts.iter().map(|r| r.id).max().unwrap_or(0) + 1;
+        // Saves anteriores à v0.9 não têm NPCs: os acampamentos ganham moradores no primeiro tick.
+        if let Some(npcs) = data.npcs {
+            sim.npcs = npcs.into_iter().map(Npc::from).collect();
+            sim.camp_timer = 60.0;
+        }
+        sim.next_npc_id = sim.npcs.iter().map(|n| n.id).max().unwrap_or(0) + 1;
         sim.offline = data.players;
         sim
     }
@@ -387,6 +428,7 @@ impl Sim {
         data.creatures = Some(self.creatures.iter().map(CreatureSave::from).collect());
         data.players = self.players.iter().map(PlayerState::to_save).collect();
         data.players.extend(self.offline.iter().cloned());
+        data.npcs = Some(self.npcs.iter().map(NpcSave::from).collect());
         data.rafts = self
             .rafts
             .iter()
@@ -577,7 +619,7 @@ impl Sim {
             let left = p.inventory.insert_stack(held);
             let left = match (
                 left,
-                container_inventory(&mut self.world, &mut self.creatures, p.container),
+                container_inventory(&mut self.world, &mut self.creatures, &mut self.npcs, p.container),
             ) {
                 (Some(stack), Some(chest)) => chest.insert_stack(stack),
                 (left, _) => left,
@@ -602,6 +644,8 @@ impl Sim {
         let positions: Vec<Vec2> = self.players.iter().map(|p| p.player.pos).collect();
         self.world.update(dt, &positions);
         self.update_creatures(dt);
+        self.update_npcs(dt);
+        self.update_tamed_combat(dt);
         for pi in 0..self.players.len() {
             self.validate_container(pi);
         }
@@ -665,6 +709,9 @@ impl Sim {
                 let usable = c.is_tamed() || (c.knocked_out && c.inventory.is_some());
                 usable && c.is_alive() && !c.mounted && c.pos.distance(pos) - c.species.radius() <= reach + 8.0
             }),
+            ContainerRef::Npc(id) => self.npcs.iter().any(|n| {
+                n.id == id && n.pos().distance(pos) <= reach + 8.0 && n.owner.as_ref().is_none_or(|o| *o == p.name)
+            }),
         };
         if !still_valid || p.dead {
             self.close_container(pi);
@@ -675,7 +722,9 @@ impl Sim {
 
     fn update_creatures(&mut self, dt: f32) {
         let flying_mounts: Vec<u32> = self.creatures.iter().filter(|c| c.flying).map(|c| c.id).collect();
-        let ai_players: Vec<AiPlayer> = self
+        // Alvos da IA: jogadores e, depois deles, os membros das tribos (moradores ficam em paz).
+        let members = self.member_ids();
+        let mut ai_players: Vec<AiPlayer> = self
             .players
             .iter()
             .map(|p| AiPlayer {
@@ -685,6 +734,12 @@ impl Sim {
                 airborne: p.mount.is_some_and(|id| flying_mounts.contains(&id)),
             })
             .collect();
+        ai_players.extend(self.npcs.iter().filter(|n| n.owner.is_some()).map(|n| AiPlayer {
+            pos: n.pos(),
+            alive: true,
+            name: tribe::NPC_AI_NAME,
+            airborne: false,
+        }));
         let input = AiInput { players: &ai_players };
         let mut bites = Vec::new();
         let mut events = Vec::new();
@@ -710,9 +765,14 @@ impl Sim {
                 self.rescue_player(pi);
             }
         }
-        for (pi, damage) in bites {
-            if pi < self.players.len() && !self.players[pi].dead {
-                self.take_bite(pi, damage);
+        let players = self.players.len();
+        for (target, damage) in bites {
+            if target < players {
+                if !self.players[target].dead {
+                    self.take_bite(target, damage);
+                }
+            } else if let Some(&id) = members.get(target - players) {
+                self.hurt_npc(id, damage);
             }
         }
 
@@ -1416,6 +1476,7 @@ impl Sim {
                 self.close_container(pi);
                 self.players[pi].container = Some(ContainerRef::Creature(id));
             }
+            Interaction::Npc(id) => self.talk_to(pi, id),
             Interaction::Raft(id) => {
                 if let Some(i) = self.rafts.iter().position(|r| r.id == id) {
                     self.board_raft(pi, i);
@@ -1466,7 +1527,7 @@ impl Sim {
 
     fn slot(&mut self, pi: usize, target: SlotTarget, left: bool, shift: bool) {
         let p = &mut self.players[pi];
-        let chest = container_inventory(&mut self.world, &mut self.creatures, p.container);
+        let chest = container_inventory(&mut self.world, &mut self.creatures, &mut self.npcs, p.container);
         match target {
             SlotTarget::Inventory(i) => {
                 let Some(slot) = p.inventory.slots.get_mut(i) else {
@@ -1599,9 +1660,13 @@ impl Sim {
                     } else {
                         self.dismount(pi);
                     }
-                } else if let Some(target) =
-                    nearest_interaction(&self.world, &self.creatures, &self.rafts, self.players[pi].player.pos)
-                {
+                } else if let Some(target) = nearest_interaction(
+                    &self.world,
+                    &self.creatures,
+                    &self.rafts,
+                    &self.npc_spots(),
+                    self.players[pi].player.pos,
+                ) {
                     self.interact(pi, target);
                 } else if self.players[pi].raft.is_some() {
                     self.leave_raft(pi);
@@ -1661,6 +1726,8 @@ impl Sim {
                 }
             }
             Command::Respawn => self.respawn(pi),
+            Command::Whistle(whistle) => self.whistle(pi, whistle),
+            Command::NpcOrder(cmd) => self.npc_order(pi, cmd),
             Command::Chat(text) => {
                 let text: String = text.chars().filter(|c| !c.is_control()).take(MAX_CHAT_LEN).collect();
                 if !text.trim().is_empty() {
@@ -1698,7 +1765,11 @@ impl Sim {
         let (open_structure, open_creature) = match me.container {
             Some(ContainerRef::Structure(i)) => (Some(i), None),
             Some(ContainerRef::Creature(c)) => (None, Some(c)),
-            None => (None, None),
+            Some(ContainerRef::Npc(_)) | None => (None, None),
+        };
+        let open_npc = match me.container {
+            Some(ContainerRef::Npc(id)) => Some(id),
+            _ => None,
         };
         Some(Snapshot {
             time: self.time,
@@ -1724,6 +1795,14 @@ impl Sim {
                 .collect(),
             projectiles: self.projectiles.iter().map(|p| p.pos.into()).collect(),
             rafts: self.rafts.iter().map(RaftSave::from).collect(),
+            npcs: self
+                .npcs
+                .iter()
+                .map(|n| {
+                    let mine = n.owner.as_ref().is_none_or(|o| *o == me.name);
+                    NpcView::new(n, Some(n.id) == open_npc && mine)
+                })
+                .collect(),
             players: self.players.iter().map(PlayerState::view).collect(),
             me: me.private(),
         })

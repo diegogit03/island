@@ -192,6 +192,8 @@ enum Drawable<'a> {
     Creature(&'a Creature),
     Avatar(&'a Avatar<'a>),
     Raft(&'a Raft),
+    Tent(Vec2, usize),
+    CampFire(Vec2),
 }
 
 /// Um personagem a desenhar (o próprio jogador ou outro na partida).
@@ -201,9 +203,17 @@ pub struct Avatar<'a> {
     /// `id` da criatura montada.
     pub mount: Option<u32>,
     pub shirt: Color,
+    pub hair: Color,
+    /// Faixa na cabeça com a cor da tribo (membros recrutados).
+    pub band: Option<Color>,
     /// Nome acima da cabeça (`None` para o próprio jogador).
     pub name: Option<&'a str>,
+    /// Barra de vida sob o nome (NPCs feridos).
+    pub health: Option<f32>,
 }
+
+/// Cabelo dos jogadores.
+pub const PLAYER_HAIR: Color = Color::new(0.31, 0.2, 0.13, 1.0);
 
 /// Cor de camisa de cada jogador, pelo `id`.
 pub fn shirt_color(id: u32) -> Color {
@@ -329,6 +339,12 @@ pub fn draw_entities(scene: &Scene) {
             .filter(|c| culled.contains(c.pos) && !high_up(c))
             .map(|c| (c.pos.y, Drawable::Creature(c))),
     );
+    for camp in world.camps.iter().filter(|c| culled.contains(c.center)) {
+        list.push((camp.center.y, Drawable::CampFire(camp.center)));
+        for (i, &t) in camp.tents.iter().enumerate() {
+            list.push((t.y, Drawable::Tent(t, i)));
+        }
+    }
     // A jangada vem logo antes de quem está em cima dela (mesmo Y).
     list.extend(
         scene
@@ -366,12 +382,8 @@ pub fn draw_entities(scene: &Scene) {
         };
         draw_creature(c, time, !high_up(c) && water.is_none(), water);
         for rider in avatars.iter().filter(|a| a.mount == Some(c.id)) {
-            draw_player(
-                rider.player,
-                rider.held,
-                rider.shirt,
-                saddle_height(c.species) + lift(c),
-            );
+            let seat = saddle_height(c.species) + lift(c);
+            draw_player(rider.player, rider.held, rider.shirt, rider.hair, rider.band, seat);
         }
     };
     for (_, d) in list {
@@ -380,8 +392,10 @@ pub fn draw_entities(scene: &Scene) {
             Drawable::Bag(b) => draw_bag(b, time),
             Drawable::Structure(s) => draw_structure(s, time),
             Drawable::Creature(c) => draw_with_riders(c),
-            Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, 0.0),
+            Drawable::Avatar(a) => draw_player(a.player, a.held, a.shirt, a.hair, a.band, 0.0),
             Drawable::Raft(r) => draw_raft(r, time),
+            Drawable::Tent(pos, variant) => draw_tent(pos, variant),
+            Drawable::CampFire(pos) => draw_campfire(Rect::new(pos.x - 16.0, pos.y - 16.0, TILE, TILE), true, time),
         }
     }
     for c in flyers {
@@ -898,11 +912,22 @@ pub fn draw_names(avatars: &[Avatar], creatures: &[Creature], camera: &Camera2D)
             Color::new(0.0, 0.0, 0.0, 0.45),
         );
         draw_text(name, at.x - w / 2.0, at.y, 18.0, WHITE);
+        if let Some(frac) = a.health {
+            let bw = 40.0;
+            draw_rectangle(at.x - bw / 2.0, at.y + 6.0, bw, 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
+            draw_rectangle(
+                at.x - bw / 2.0,
+                at.y + 6.0,
+                bw * frac,
+                4.0,
+                Color::new(0.4, 0.85, 0.4, 1.0),
+            );
+        }
     }
 }
 
-/// `seat`: altura da sela quando montado (0 = a pé).
-fn draw_player(p: &Player, held: Option<ItemId>, shirt: Color, seat: f32) {
+/// `seat`: altura da sela quando montado (0 = a pé). `band`: faixa da tribo na cabeça.
+fn draw_player(p: &Player, held: Option<ItemId>, shirt: Color, hair: Color, band: Option<Color>, seat: f32) {
     let s = p.facing.sign();
     let mounted = seat > 0.0;
     let (x, y) = (p.pos.x, p.pos.y - seat);
@@ -915,7 +940,6 @@ fn draw_player(p: &Player, held: Option<ItemId>, shirt: Color, seat: f32) {
 
     let skin = Color::from_rgba(232, 186, 146, 255);
     let pants = Color::from_rgba(70, 64, 92, 255);
-    let hair = Color::from_rgba(78, 50, 34, 255);
 
     if mounted {
         // Pernas abertas sobre a sela.
@@ -933,6 +957,9 @@ fn draw_player(p: &Player, held: Option<ItemId>, shirt: Color, seat: f32) {
     draw_circle(x, hy, 7.0, skin);
     draw_rectangle(x - 7.0, hy - 7.0, 14.0, 4.0, hair);
     draw_rectangle(x - 7.0 * s, hy - 5.0, 4.0 * s, 6.0, hair);
+    if let Some(band) = band {
+        draw_rectangle(x - 7.0, hy - 4.5, 14.0, 2.5, band);
+    }
     draw_rectangle(x + 3.0 * s - 1.0, hy - 1.0, 2.0, 3.0, Color::from_rgba(40, 30, 30, 255));
 
     // Braço + item: ângulo 0 = para frente; negativo = para cima.
@@ -2044,6 +2071,48 @@ fn draw_cactus(pos: Vec2, variant: u8, alive: bool) {
     if variant == 3 {
         draw_circle(x, y - h - 3.0, 2.2, Color::from_rgba(236, 110, 150, 255));
     }
+}
+
+/// Tenda de couro do acampamento: duas faces em 3/4, abertura escura e varas cruzadas no topo.
+fn draw_tent(pos: Vec2, variant: usize) {
+    let (x, y) = (pos.x, pos.y);
+    const HIDES: [(u8, u8, u8); 3] = [(196, 168, 120), (176, 132, 92), (206, 186, 150)];
+    let (r, g, b) = HIDES[variant % HIDES.len()];
+    let hide = Color::from_rgba(r, g, b, 255);
+    draw_ellipse(x, y + 2.0, 26.0, 7.0, 0.0, SHADOW);
+    let top = vec2(x, y - 40.0);
+    draw_triangle(top, vec2(x - 26.0, y + 4.0), vec2(x, y + 6.0), shade(hide, 0.85));
+    draw_triangle(top, vec2(x, y + 6.0), vec2(x + 26.0, y + 4.0), hide);
+    draw_triangle(
+        vec2(x, y - 20.0),
+        vec2(x - 7.0, y + 5.0),
+        vec2(x + 7.0, y + 5.0),
+        Color::from_rgba(52, 38, 28, 255),
+    );
+    let pole = Color::from_rgba(96, 66, 40, 255);
+    draw_line(top.x, top.y, top.x - 6.0, top.y - 10.0, 2.0, pole);
+    draw_line(top.x, top.y, top.x + 6.0, top.y - 9.0, 2.0, pole);
+    for i in 1..4 {
+        let t = i as f32 / 4.0;
+        let p = top.lerp(vec2(x + 26.0, y + 4.0), t);
+        draw_line(p.x - 3.0, p.y, p.x + 3.0, p.y + 1.0, 1.0, shade(hide, 0.7));
+    }
+}
+
+/// Camisa e cabelo de um NPC (pela variação `look`).
+pub fn npc_look(look: u8) -> (Color, Color) {
+    const SHIRTS: [(u8, u8, u8); 6] = [
+        (150, 112, 70),
+        (112, 132, 80),
+        (168, 92, 70),
+        (96, 110, 130),
+        (186, 160, 110),
+        (120, 86, 110),
+    ];
+    const HAIRS: [(u8, u8, u8); 4] = [(30, 24, 20), (78, 50, 34), (150, 104, 60), (60, 40, 30)];
+    let (r, g, b) = SHIRTS[look as usize % SHIRTS.len()];
+    let (hr, hg, hb) = HAIRS[(look as usize / 2) % HAIRS.len()];
+    (Color::from_rgba(r, g, b, 255), Color::from_rgba(hr, hg, hb, 255))
 }
 
 /// Criatura deitada: morta (olho em X) ou desmaiada (olho fechado).

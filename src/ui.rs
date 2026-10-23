@@ -9,8 +9,9 @@ use crate::creatures::{Command, Creature, MountHarvest};
 use crate::daynight;
 use crate::inventory::{HOTBAR_SIZE, Inventory, Stack};
 use crate::items::ItemId;
+use crate::npc::{GatherKind, NpcView};
 use crate::progression::{self, Attribute, Progression};
-use crate::protocol::{MAX_CHAT_LEN, SlotTarget};
+use crate::protocol::{MAX_CHAT_LEN, NpcCmd, SlotTarget};
 use crate::taming;
 use crate::vitals::Vitals;
 
@@ -60,6 +61,10 @@ pub enum PanelKind {
     Taming,
     /// Dino domesticado.
     Tamed,
+    /// Membro da sua tribo: ordens e inventário.
+    Npc,
+    /// Morador de acampamento: recrutar.
+    Recruit,
 }
 
 impl PanelKind {
@@ -68,7 +73,8 @@ impl PanelKind {
         match self {
             PanelKind::Storage => 0.0,
             PanelKind::Campfire => 84.0,
-            PanelKind::Taming | PanelKind::Tamed => 112.0,
+            PanelKind::Taming | PanelKind::Tamed | PanelKind::Recruit => 112.0,
+            PanelKind::Npc => 156.0,
         }
     }
 
@@ -76,6 +82,15 @@ impl PanelKind {
         match self {
             PanelKind::Campfire => &[UiAction::ToggleFire],
             PanelKind::Tamed => &[UiAction::ToggleCommand, UiAction::Mount],
+            PanelKind::Npc => &[
+                UiAction::NpcOrder(NpcCmd::Follow),
+                UiAction::NpcOrder(NpcCmd::Stay),
+                UiAction::NpcOrder(NpcCmd::Defend),
+                UiAction::NpcOrder(NpcCmd::Gather(GatherKind::Wood)),
+                UiAction::NpcOrder(NpcCmd::Gather(GatherKind::Stone)),
+                UiAction::NpcOrder(NpcCmd::Gather(GatherKind::Metal)),
+            ],
+            PanelKind::Recruit => &[UiAction::NpcOrder(NpcCmd::Recruit)],
             PanelKind::Storage | PanelKind::Taming => &[],
         }
     }
@@ -86,6 +101,7 @@ impl PanelKind {
 pub enum ContainerView<'a> {
     Structure(&'a Structure),
     Creature(&'a Creature),
+    Npc(&'a NpcView),
 }
 
 impl<'a> ContainerView<'a> {
@@ -95,6 +111,8 @@ impl<'a> ContainerView<'a> {
             ContainerView::Structure(_) => PanelKind::Storage,
             ContainerView::Creature(c) if c.is_tamed() => PanelKind::Tamed,
             ContainerView::Creature(_) => PanelKind::Taming,
+            ContainerView::Npc(n) if n.owner.is_some() => PanelKind::Npc,
+            ContainerView::Npc(_) => PanelKind::Recruit,
         }
     }
 
@@ -102,6 +120,7 @@ impl<'a> ContainerView<'a> {
         match self {
             ContainerView::Structure(s) => s.storage.as_ref(),
             ContainerView::Creature(c) => c.inventory.as_ref(),
+            ContainerView::Npc(n) => n.inventory.as_ref(),
         }
     }
 
@@ -109,6 +128,8 @@ impl<'a> ContainerView<'a> {
         match self {
             ContainerView::Structure(s) => s.kind.item().name().to_owned(),
             ContainerView::Creature(c) => format!("{} Nv {}", c.species.name(), c.level),
+            ContainerView::Npc(n) if n.owner.is_some() => format!("{} (sua tribo)", n.name),
+            ContainerView::Npc(n) => format!("{} (acampamento)", n.name),
         }
     }
 }
@@ -134,6 +155,8 @@ pub enum UiAction {
     Mount,
     /// Gastar um ponto de atributo.
     SpendAttribute(Attribute),
+    /// Botão do painel de um NPC (ordem ou recrutar).
+    NpcOrder(NpcCmd),
 }
 
 /// Tudo o que o HUD precisa ler do jogo.
@@ -243,8 +266,15 @@ fn panel_layout(n_slots: usize, container: Option<(usize, PanelKind)>, queue_len
             let slots = grid(top, n, COLS, SLOT);
             let info_y = top.y + grid_height(n, COLS, SLOT) + 8.0;
             let info = Rect::new(top.x, info_y, RIGHT_W - PAD * 2.0, kind.extra_height());
-            let buttons = (0..kind.buttons().len())
-                .map(|i| Rect::new(top.x + i as f32 * 132.0, info.bottom() - 40.0, 120.0, 32.0))
+            // Botões em linhas de três, de baixo para cima.
+            let n = kind.buttons().len();
+            let rows = n.div_ceil(3);
+            let buttons = (0..n)
+                .map(|i| {
+                    let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+                    let y = info.bottom() - 40.0 - (rows as f32 - 1.0 - row) * 38.0;
+                    Rect::new(top.x + col * 122.0, y, 112.0, 32.0)
+                })
                 .collect();
             RightLayout::Container { slots, info, buttons }
         }
@@ -451,6 +481,7 @@ fn draw_help() {
         "WASD: mover   Shift: correr   E / Clique: coletar ou beber   R / Botão dir.: comer",
         "F: interagir   Q: largar (Ctrl+Q: pilha)   Estrutura na mão: clique posiciona, X demole",
         "Montado: E / Clique morde   Espaço: decolar/pousar (voadores)",
+        "Tribo (apito): Z seguir   C ficar   B defender   V atacar o bicho sob o mouse",
         "1-6 / Roda: hotbar   Tab / I: inventário   Enter: chat   F5: salvar   H: esconder ajuda",
     ];
     for (i, line) in lines.iter().enumerate() {
@@ -689,15 +720,19 @@ fn draw_panels(hud: &Hud) {
                 }
                 ContainerView::Creature(c) if c.is_tamed() => draw_tamed_info(c, *info, buttons, m),
                 ContainerView::Creature(c) => draw_taming_info(c, *info),
+                ContainerView::Npc(n) if n.owner.is_some() => draw_npc_info(n, *info, buttons, m),
+                ContainerView::Npc(n) => draw_recruit_info(n, inv, *info, buttons[0], m),
                 ContainerView::Structure(_) => {}
             }
-            draw_text(
-                "Shift+clique: transferir tudo",
-                rp.x + PAD,
-                rp.bottom() - 12.0,
-                18.0,
-                DIM,
-            );
+            if view.kind() != PanelKind::Recruit {
+                draw_text(
+                    "Shift+clique: transferir tudo",
+                    rp.x + PAD,
+                    rp.bottom() - 12.0,
+                    18.0,
+                    DIM,
+                );
+            }
         }
         (RightLayout::Craft { recipes, detail, queue }, _) => {
             draw_panel(rp, "Crafting");
@@ -842,6 +877,58 @@ fn draw_taming_info(c: &Creature, area: Rect) {
     }
 }
 
+/// Vida, ordem atual e botões de ordem de um membro da tribo.
+fn draw_npc_info(n: &NpcView, area: Rect, buttons: &[Rect], m: Vec2) {
+    let label = format!("Vida {:.0}/{:.0}", n.health, crate::npc::MAX_HEALTH);
+    draw_bar(
+        area.x,
+        area.y + 14.0,
+        area.w,
+        &label,
+        n.health_frac(),
+        Color::new(0.4, 0.8, 0.4, 1.0),
+    );
+    let mut order = n.order.label();
+    if n.hauling {
+        order.push_str(" (levando ao baú)");
+    }
+    draw_text(format!("Ordem: {order}"), area.x, area.y + 44.0, 18.0, TEXT);
+    draw_text(
+        "Dê ferramentas e armas. A coleta vai para um baú.",
+        area.x,
+        area.y + 64.0,
+        16.0,
+        DIM,
+    );
+    let labels = ["Seguir", "Ficar", "Defender", "Madeira", "Pedra", "Metal"];
+    for (rect, label) in buttons.iter().zip(labels) {
+        draw_button(*rect, label, true, m);
+    }
+}
+
+/// Pedido do morador para entrar na tribo e o botão de recrutar.
+fn draw_recruit_info(n: &NpcView, inv: &Inventory, area: Rect, button: Rect, m: Vec2) {
+    let (item, count) = n.recruit_cost();
+    let have = inv.count(item);
+    draw_text(
+        format!("{} vive neste acampamento.", n.name),
+        area.x,
+        area.y + 10.0,
+        18.0,
+        TEXT,
+    );
+    draw_text(
+        format!("Para entrar na sua tribo, pede {count} {}.", item.name()),
+        area.x,
+        area.y + 32.0,
+        18.0,
+        TEXT,
+    );
+    let color = if have >= count { OK } else { BAD };
+    draw_text(format!("Você tem {have}."), area.x, area.y + 52.0, 18.0, color);
+    draw_button(button, "Recrutar", have >= count, m);
+}
+
 /// Vida, ordem atual e botões de um dino domesticado.
 fn draw_tamed_info(c: &Creature, area: Rect, buttons: &[Rect], m: Vec2) {
     let label = format!("Vida {:.0}/{:.0}", c.health, c.max_health());
@@ -855,6 +942,7 @@ fn draw_tamed_info(c: &Creature, area: Rect, buttons: &[Rect], m: Vec2) {
     );
     let (order, toggle) = match c.command {
         Some(Command::Stay) => ("Parado", "Seguir"),
+        Some(Command::Defend) => ("Defendendo o lugar", "Seguir"),
         _ => ("Seguindo você", "Ficar"),
     };
     draw_text(format!("Ordem: {order}"), area.x, area.y + 44.0, 18.0, TEXT);

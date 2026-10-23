@@ -621,6 +621,8 @@ pub enum State {
 pub enum Command {
     Follow,
     Stay,
+    /// Fica no lugar (`Creature::home`) e ataca criaturas perigosas que chegam perto.
+    Defend,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -688,6 +690,10 @@ pub struct Creature {
     pub moving: bool,
     pub anim_time: f32,
     pub corpse: Option<Corpse>,
+    /// Domesticado atacando esta criatura (`id`); a luta é conduzida pela simulação (`sim/tribe.rs`).
+    pub attack_target: Option<u32>,
+    /// Posto de quem recebeu a ordem de defender.
+    pub home: Option<Vec2>,
 }
 
 /// O que a IA sabe sobre um jogador neste frame.
@@ -755,6 +761,8 @@ impl Creature {
             moving: false,
             anim_time: 0.0,
             corpse: None,
+            attack_target: None,
+            home: None,
         }
     }
 
@@ -1151,6 +1159,10 @@ impl Creature {
     fn update_tamed(&mut self, world: &World, input: &AiInput, dt: f32) {
         self.health = (self.health + self.max_health() * TAMED_REGEN * dt).min(self.max_health());
         self.moving = false;
+        // Lutando: quem anda é a simulação da tribo.
+        if self.attack_target.is_some() {
+            return;
+        }
         if self.command != Some(Command::Follow) {
             self.try_land(world);
             return;
@@ -1236,7 +1248,7 @@ impl Creature {
     pub fn toggle_command(&mut self) {
         self.command = match self.command {
             Some(Command::Follow) => Some(Command::Stay),
-            Some(Command::Stay) => Some(Command::Follow),
+            Some(Command::Stay | Command::Defend) => Some(Command::Follow),
             None => None,
         };
     }
@@ -1247,7 +1259,7 @@ impl Creature {
     }
 
     /// Move na direção `dir`, deslizando em obstáculos. Retorna false se não saiu do lugar.
-    fn step(&mut self, world: &World, dir: Vec2, speed: f32, dt: f32) -> bool {
+    pub fn step(&mut self, world: &World, dir: Vec2, speed: f32, dt: f32) -> bool {
         let dir = dir.normalize_or_zero();
         if dir == Vec2::ZERO {
             return false;

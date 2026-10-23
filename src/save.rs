@@ -11,6 +11,7 @@ use crate::building::Structure;
 use crate::crafting::CraftQueue;
 use crate::creatures::CreatureSave;
 use crate::inventory::Stack;
+use crate::npc::NpcSave;
 use crate::progression::Progression;
 use crate::raft::RaftSave;
 use crate::vitals::Vitals;
@@ -54,6 +55,9 @@ pub struct SaveData {
     pub players: Vec<PlayerSave>,
     #[serde(default)]
     pub rafts: Vec<RaftSave>,
+    /// `None` em saves anteriores à v0.9 (os acampamentos ganham moradores novos).
+    #[serde(default)]
+    pub npcs: Option<Vec<NpcSave>>,
 
     // ----- Formato v1 (um jogador): só lidos, nunca gravados. -----
     #[serde(default, skip_serializing)]
@@ -84,6 +88,7 @@ impl SaveData {
             creatures: None,
             players: Vec::new(),
             rafts: Vec::new(),
+            npcs: None,
             player_pos: None,
             facing_left: None,
             vitals: None,

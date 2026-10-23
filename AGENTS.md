@@ -14,7 +14,7 @@ cargo run -- --server [--port 7777] [--save saves/save.json] [--name "Nome"]   #
 cargo test                # lógica + servidor de verdade (cliente local e dois clientes TCP)
 cargo fmt && cargo clippy --all-targets -- -D warnings   # rustfmt.toml: max_width 120
 ISLAND_SHOT=out.png cargo run                          # smoke test: sobe servidor local, salva screenshot e sai
-ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, FLY, CARGO, ICE, SWAMP, SEA, SEA_RIDE, DESERT, MOUNTAIN, COOP, MENU
+ISLAND_SHOT=out.png ISLAND_SHOT_<CENA>=1 cargo run     # cenas: INVENTORY, DEAD, BUILD, CREATURES, FIRE, TAME, RIDE, PET, FLY, CARGO, ICE, SWAMP, SEA, SEA_RIDE, DESERT, TRIBE, RECRUIT, MEMBER, MOUNTAIN, COOP, MENU
 ISLAND_SHOT=out.png ISLAND_SHOT_HOUR=22 cargo run      # ajusta o relógio (combina com as cenas)
 ISLAND_SHOT=out.png ISLAND_SHOT_JOIN=127.0.0.1:7777 cargo run   # entra num servidor já rodando (teste com processos reais)
 ISLAND_NEW=1 ISLAND_SEED=42 cargo run  # ignora o save e gera outra ilha
@@ -46,6 +46,7 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 | `items.rs` / `inventory.rs` | Itens e inventário em slots (hotbar = slots `0..HOTBAR_SIZE`). |
 | `crafting.rs` | Receitas (tempo, estação, nível, custo de engrama) e fila de crafting. |
 | `building.rs` | Estruturas no grid, colisão, fogo (fogueira cozinha, forja funde). |
+| `npc.rs` / `sim/tribe.rs` | NPCs (estado, ferramentas, ordens, save) e o comportamento da tribo no tick: moradores, recrutar, coletar e guardar, lutar, apitos, domesticados lutando. |
 | `raft.rs` | Jangada: flutuação, remo, onde pôr e onde descer. Fica em `Sim::rafts`; o jogador nela tem `PlayerState::raft`. |
 | `creatures.rs` / `taming.rs` | Fauna (IA contra vários jogadores, dono de domesticados, voadores, peso de carga), torpor e domesticação. |
 | `gathering.rs` / `combat.rs` | Rendimento de coleta; pedras do estilingue. |
@@ -60,7 +61,7 @@ Um jogador = servidor numa thread + cliente local por canal (sem rede). Hospedar
 - O snapshot manda inventários só do contêiner aberto por aquele jogador; o resto (tiles, posições dos nós) o cliente gera pela seed.
 - Coordenadas de mundo em pixels, Y para baixo, `TILE = 32`. `pos` de entidade = ponto do pé (base), usado no y-sort e na colisão.
 - Item novo: variante em `ItemId` + seus `match` em `items.rs` (inclusive `weight`) + ícone em `ui::draw_item_icon`.
-- Geração do mundo: não mude a sequência do RNG de `scatter_nodes` (saves guardam nós por índice). Nós novos vão no fim, com RNG próprio (ver `scatter_mountain_extras`). Biomas novos trocam tiles depois de espalhar os nós, sem RNG (ver `freeze_north`, `flood_east` e `dry_west`).
+- Geração do mundo: não mude a sequência do RNG de `scatter_nodes` (saves guardam nós por índice). Nós novos vão no fim, com RNG próprio (ver `scatter_mountain_extras`). Biomas novos trocam tiles depois de espalhar os nós, sem RNG (ver `freeze_north`, `flood_east` e `dry_west`). Acampamentos também vêm da seed (`place_camps`).
 - Save: campo novo leva `#[serde(default)]`; quebrar o formato exige subir `SAVE_VERSION` e converter o antigo em `save.rs`.
 - Espécie nova: `Species` + seus `match` + `render::draw_creature`. Voadora: `fly_speed` (no ar, colisão só com a borda do mapa; ver `Creature::flying`). Onde pisa: `Species::terrain` (terra, anfíbio, só lagoa, mar, debaixo da areia). Criaturas são referenciadas por `id`, nunca por índice guardado.
 - Voar não é salvo: ao carregar ou ao descer à força (morte, saída), voadores e jogadores vão para o chão livre mais próximo (`World::find_near`).

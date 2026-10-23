@@ -12,6 +12,7 @@ mod inventory;
 mod items;
 mod menu;
 mod net;
+mod npc;
 mod player;
 mod progression;
 mod protocol;
@@ -208,7 +209,8 @@ fn start_session(choice: Choice, name: &str) -> Result<(Connection, Option<Serve
 /// _MOUNTAIN, _COOP (um segundo jogador "Bia" ao lado, com mensagem no chat), _FLY (voando de
 /// pteranodonte com um argentavis), _CARGO (painel de carga do argentavis), _ICE (bioma de gelo,
 /// montado num mamute), _SWAMP (pântano, montado num sarcosuchus entre piranhas), _SEA (jangada no mar
-/// com fauna marinha), _SEA_RIDE (montado num mosassauro) e _DESERT (montado num canguru no deserto).
+/// com fauna marinha), _SEA_RIDE (montado num mosassauro), _DESERT (montado num canguru no deserto),
+/// _TRIBE (acampamento com membros da tribo), _RECRUIT (recrutar um morador) e _MEMBER (painel de ordens).
 /// Com ISLAND_SHOT_JOIN=ip:porta, entra num servidor já rodando em vez de subir um local;
 /// ISLAND_SHOT_MENU mostra o menu principal.
 async fn screenshot(path: &str) {
@@ -259,6 +261,15 @@ async fn screenshot(path: &str) {
         }
         if env("ISLAND_SHOT_SWAMP").is_some() {
             sim.demo_swamp();
+        }
+        if env("ISLAND_SHOT_TRIBE").is_some() {
+            sim.demo_tribe();
+        }
+        if env("ISLAND_SHOT_RECRUIT").is_some() {
+            sim.demo_recruit();
+        }
+        if env("ISLAND_SHOT_MEMBER").is_some() {
+            sim.demo_member();
         }
         if env("ISLAND_SHOT_DESERT").is_some() {
             sim.demo_desert();

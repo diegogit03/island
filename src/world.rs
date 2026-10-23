@@ -150,6 +150,21 @@ pub struct GroundBag {
     pub ttl: f32,
 }
 
+/// Acampamento de NPCs: tendas em volta de uma fogueira sempre acesa. Fixo, gerado pela seed
+/// (saves antigos ganham os mesmos acampamentos).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Camp {
+    pub center: Vec2,
+    pub tents: Vec<Vec2>,
+}
+
+/// Raio de colisão de uma tenda.
+pub const TENT_RADIUS: f32 = 16.0;
+/// Ninguém constrói tão perto do centro de um acampamento.
+pub const CAMP_RADIUS: f32 = 110.0;
+const CAMP_COUNT: usize = 6;
+const CAMP_LIGHT: f32 = 150.0;
+
 pub struct World {
     pub width: usize,
     pub height: usize,
@@ -158,6 +173,7 @@ pub struct World {
     pub nodes: Vec<ResourceNode>,
     pub bags: Vec<GroundBag>,
     pub structures: Vec<Structure>,
+    pub camps: Vec<Camp>,
     pub spawn: Vec2,
 }
 
@@ -194,6 +210,7 @@ impl World {
             nodes: Vec::new(),
             bags: Vec::new(),
             structures: Vec::new(),
+            camps: Vec::new(),
             spawn: Vec2::ZERO,
         };
         world.spawn = world.find_beach_spawn();
@@ -202,7 +219,37 @@ impl World {
         world.flood_east();
         world.dry_west();
         world.scatter_desert_extras();
+        world.place_camps();
         world
+    }
+
+    /// Acampamentos em clareiras de terra firme (fora da montanha), longe do spawn e uns dos outros.
+    fn place_camps(&mut self) {
+        let mut rng = Rng::new(self.seed.wrapping_add(83));
+        for _ in 0..6000 {
+            if self.camps.len() >= CAMP_COUNT {
+                break;
+            }
+            let x = rng.range_u32(5, self.width as u32 - 6) as i32;
+            let y = rng.range_u32(5, self.height as u32 - 6) as i32;
+            let center = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
+            let clearing = (-3..=3).all(|dy| {
+                (-3..=3).all(|dx| {
+                    let t = self.tile(x + dx, y + dy);
+                    t.is_land() && t != Tile::Mountain
+                })
+            });
+            let far = center.distance(self.spawn) > TILE * 30.0
+                && self.camps.iter().all(|c| c.center.distance(center) > TILE * 35.0);
+            if !clearing || !far || self.nodes.iter().any(|n| n.pos.distance(center) < 100.0) {
+                continue;
+            }
+            let tents = [vec2(-62.0, -30.0), vec2(60.0, -26.0), vec2(-6.0, 54.0)];
+            self.camps.push(Camp {
+                center,
+                tents: tents.iter().map(|&o| center + o).collect(),
+            });
+        }
     }
 
     /// Bioma de deserto: a grama e a areia do oeste viram deserto, com oásis (água rasa) onde não há nós.
@@ -454,7 +501,13 @@ impl World {
             let r = n.kind.collision_radius();
             r > 0.0 && n.is_alive() && n.pos.distance_squared(pos) < (r + radius).powi(2)
         });
+        let tent_hit = self
+            .camps
+            .iter()
+            .flat_map(|c| &c.tents)
+            .any(|t| t.distance_squared(pos) < (TENT_RADIUS + radius).powi(2));
         node_hit
+            || tent_hit
             || self
                 .structures
                 .iter()
@@ -491,7 +544,11 @@ impl World {
             building::distance_to_rect(n.pos, rect) < r
         });
         let candidate = Structure::new(kind, tile);
-        if node_inside || candidate.blocks(player_pos, player_radius) {
+        let in_camp = self
+            .camps
+            .iter()
+            .any(|c| c.center.distance(rect.center()) < CAMP_RADIUS);
+        if node_inside || in_camp || candidate.blocks(player_pos, player_radius) {
             return Err(PlaceError::Blocked);
         }
         Ok(())
@@ -510,10 +567,12 @@ impl World {
 
     /// Fontes de luz ativas: (posição, raio).
     pub fn lights(&self) -> impl Iterator<Item = (Vec2, f32)> + '_ {
+        let fires = self.camps.iter().map(|c| (c.center, CAMP_LIGHT));
         self.structures
             .iter()
             .filter(|s| s.is_lit())
             .map(|s| (s.rect().center() + vec2(0.0, 6.0), s.light_radius()))
+            .chain(fires)
     }
 
     pub fn drop_bag(&mut self, pos: Vec2, stacks: Vec<Stack>, kind: BagKind) {
@@ -623,6 +682,15 @@ mod tests {
         assert!(count(Tile::Snow) > 100 && count(Tile::Swamp) > 100 && count(Tile::SwampWater) > 20);
         assert!(count(Tile::Desert) > 100, "deserto a oeste");
         assert!(world.nodes.iter().any(|n| n.kind == NodeKind::Cactus));
+        assert!(world.camps.len() >= 4, "acampamentos de NPCs: {}", world.camps.len());
+        for camp in &world.camps {
+            assert!(camp.center.distance(world.spawn) > TILE * 30.0);
+            assert!(world.blocked(camp.tents[0], 4.0), "tenda é sólida");
+            assert!(
+                !world.blocked(camp.center + vec2(0.0, -40.0), 7.0),
+                "dá para andar no acampamento"
+            );
+        }
         assert!(!world.blocked(world.spawn, 7.0));
         let count = |kind| world.nodes.iter().filter(|n| n.kind == kind).count();
         assert!(count(NodeKind::Tree) > 50);

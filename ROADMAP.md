@@ -92,13 +92,16 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - **Louva-deus** (agressivo, domesticável)
   - **Verme da morte** (agressivo, não domesticável): anda enterrado, ninguém acerta; só sai da areia para morder
 
-## v0.9 — NPCs e tribos
-- Acampamentos de NPCs espalhados pelo mapa (cabanas e fogueira), onde dá para recrutar NPCs para a sua tribo
-- Membros da tribo com nome, vida e inventário; o jogador dá ferramentas e armas para eles
-- Comandos: seguir, ficar, coletar (madeira, pedra...) e guardar no baú, defender, atacar um alvo
-- NPCs seguem as mesmas regras de coleta e combate do jogador (a simulação no servidor já trata cada um como um agente)
-- Domesticados também passam a lutar junto com o dono e a obedecer aos comandos de combate
-- Multiplayer: a tribo é de quem recrutou; base para as tribos entre jogadores da v1.0
+## ✅ v0.9 — NPCs e tribos
+- Acampamentos fixos pelo mapa (gerados pela seed: tendas em volta de uma fogueira sempre acesa), com 3 moradores cada; recrutados são repostos com o tempo
+- Recrutar: F no morador e pagar o que ele pede (carne cozida, couro, frutinhas, sílex ou madeira); até 8 membros por jogador
+- Membros com nome, vida (regenera) e inventário: arraste ferramentas e armas para o painel; eles usam a melhor para cada tarefa
+- Ordens no painel: seguir (defende o dono de quem o caça), ficar, defender o posto, coletar madeira/pedra/metal e guardar no baú mais perto
+- Apitos para a tribo toda por perto (membros e domesticados): Z seguir, C ficar, B defender, V atacar o bicho sob o mouse
+- Domesticados que mordem lutam junto: atacam o alvo do apito, defendem o dono seguindo e guardam o posto
+- Criaturas selvagens também caçam membros da tribo; membro morto deixa a bolsa com o inventário
+- Multiplayer: a tribo é de quem recrutou (só o dono abre o painel e dá ordens); faixa na cabeça na cor do dono
+- Ainda não: NPCs hostis, fome dos membros, tribos entre jogadores (v1.0)
 
 ## v0.10 — Construções
 - Tiers de pedra e metal (fundações, paredes, portas), teto e andares
