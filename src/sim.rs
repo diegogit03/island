@@ -29,6 +29,8 @@ use crate::world::{BagKind, GroundBag, NodeKind, TILE, Tile, World};
 
 pub const MAP_SIZE: usize = 160;
 pub const PICKUP_REACH: f32 = 28.0;
+/// Água que cada golpe num cacto dá.
+const CACTUS_WATER: f32 = 6.0;
 /// Intervalo entre tentativas de repor a fauna.
 const RESPAWN_SECS: f32 = 10.0;
 /// Montado, a velocidade é a corrida da espécie vezes isto (Shift multiplica de novo).
@@ -75,7 +77,7 @@ pub fn find_target(world: &World, creatures: &[Creature], p: &Player, held: Opti
     let creatures = creatures
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.is_wild() && !c.knocked_out && !c.flying)
+        .filter(|(_, c)| c.is_wild() && !c.knocked_out && !c.flying && !c.buried)
         .filter_map(|(i, c)| {
             let (reach, bonus) = if c.is_alive() {
                 (weapon_reach, 10.0)
@@ -813,10 +815,9 @@ impl Sim {
                 if !stone.update(&self.world, sub_dt) {
                     return false;
                 }
-                let target = self
-                    .creatures
-                    .iter()
-                    .position(|c| c.is_wild() && c.is_conscious() && stone.hits(c.pos, c.species.radius()));
+                let target = self.creatures.iter().position(|c| {
+                    c.is_wild() && c.is_conscious() && !c.buried && stone.hits(c.pos, c.species.radius())
+                });
                 if let Some(i) = target {
                     hits.push((i, stone.damage, stone.torpor, stone.owner, stone.pos - stone.vel));
                     return false;
@@ -1075,7 +1076,7 @@ impl Sim {
             .creatures
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.is_wild() && c.is_conscious() && (airborne || !c.flying))
+            .filter(|(_, c)| c.is_wild() && c.is_conscious() && !c.buried && (airborne || !c.flying))
             .map(|(i, c)| {
                 (
                     i,
@@ -1288,6 +1289,12 @@ impl Sim {
             self.gain_xp(pi, progression::XP_GATHER);
         }
         self.give_drops(pi, pos, drops);
+        if kind == NodeKind::Cactus {
+            // A seiva do cacto mata um pouco a sede.
+            self.players[pi].vitals.drink(CACTUS_WATER);
+            let at = self.players[pi].player.pos - vec2(0.0, 40.0);
+            self.popup(at, format!("+{CACTUS_WATER} Água"));
+        }
     }
 
     /// Coloca os itens coletados no inventário, com números flutuantes sobre `pos`.
@@ -2042,6 +2049,38 @@ impl Sim {
         self.mount_creature(0, id);
     }
 
+    /// Primeiro jogador no deserto montado num canguru perto de cactos, com um golem e um louva-deus
+    /// domesticados, um verme da morte saindo da areia e um golem selvagem disfarçado de rocha.
+    pub fn demo_desert(&mut self) {
+        let world = &self.world;
+        let open = |p: Vec2| {
+            [vec2(0.0, 0.0), vec2(-70.0, 30.0), vec2(80.0, 10.0), vec2(150.0, -40.0)]
+                .iter()
+                .all(|&o| world.tile_at(p + o) == Tile::Desert && !world.blocked(p + o, 16.0))
+        };
+        let Some(spot) = world
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Cactus)
+            .map(|n| n.pos + vec2(-36.0, 18.0))
+            .find(|&p| open(p))
+        else {
+            return;
+        };
+        self.creatures.clear();
+        self.players[0].player.pos = spot;
+        let roo = self.demo_tamed(Species::Kangaroo, spot, 12);
+        self.demo_tamed(Species::StoneGolem, spot + vec2(-70.0, 30.0), 15);
+        self.demo_tamed(Species::Mantis, spot + vec2(-40.0, 60.0), 10);
+        let mut worm = Creature::new(Species::Deathworm, spot + vec2(80.0, 10.0)).with_level(14);
+        worm.buried = false;
+        worm.facing_left = true;
+        self.add_creature(worm);
+        let golem = Creature::new(Species::StoneGolem, spot + vec2(150.0, -40.0)).with_level(9);
+        self.add_creature(golem);
+        self.mount_creature(0, roo);
+    }
+
     /// Painel de carga de um argentavis domesticado.
     pub fn demo_cargo(&mut self) {
         self.creatures.clear();
@@ -2459,6 +2498,28 @@ mod tests {
         sim.command(ids[0], Command::Interact);
         assert_eq!(sim.players[0].mount, None);
         assert_eq!(sim.players[0].raft, Some(sim.rafts[0].id), "desceu na jangada");
+    }
+
+    #[test]
+    fn cactus_quenches_thirst_and_buried_worms_cannot_be_hit() {
+        let (mut sim, _) = sim_with(&["Ana"]);
+        sim.creatures.clear();
+        let cactus = sim.world.nodes.iter().position(|n| n.kind == NodeKind::Cactus).unwrap();
+        let pos = sim.world.nodes[cactus].pos;
+        sim.players[0].player.pos = pos - vec2(20.0, 0.0);
+        sim.players[0].vitals.water = 10.0;
+        sim.hit_node(0, cactus);
+        assert!(sim.players[0].vitals.water > 10.0, "cacto dá água");
+        assert!(sim.players[0].inventory.count(ItemId::Thatch) > 0);
+
+        let mut worm = Creature::new(Species::Deathworm, pos + vec2(10.0, 0.0));
+        assert!(worm.buried);
+        let p = &sim.players[0].player;
+        let target = find_target(&sim.world, std::slice::from_ref(&worm), p, None);
+        assert!(!matches!(target, Some(Target::Creature(_))), "enterrado não é alvo");
+        worm.buried = false;
+        let target = find_target(&sim.world, std::slice::from_ref(&worm), p, None);
+        assert_eq!(target, Some(Target::Creature(0)), "exposto, vira alvo");
     }
 
     #[test]

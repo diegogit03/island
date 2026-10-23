@@ -21,6 +21,7 @@ const MOUNTAIN: Color = Color::new(0.55, 0.52, 0.48, 1.0);
 const SNOW: Color = Color::new(0.92, 0.94, 0.97, 1.0);
 const SWAMP: Color = Color::new(0.36, 0.42, 0.25, 1.0);
 const SWAMP_WATER: Color = Color::new(0.25, 0.35, 0.28, 1.0);
+const DESERT: Color = Color::new(0.88, 0.72, 0.46, 1.0);
 const SHADOW: Color = Color::new(0.0, 0.0, 0.0, 0.22);
 
 fn shade(c: Color, f: f32) -> Color {
@@ -50,6 +51,7 @@ pub fn draw_ground(world: &World, view: Rect, time: f32) {
                 Tile::Mountain => shade(MOUNTAIN, 0.92 + h * 0.14),
                 Tile::Snow => shade(SNOW, 0.97 + h * 0.04),
                 Tile::Swamp => shade(SWAMP, variation),
+                Tile::Desert => shade(DESERT, variation),
                 Tile::SwampWater => shade(
                     SWAMP_WATER,
                     1.0 + (time * 1.2 + x as f32 * 0.6 + y as f32 * 0.4).sin() * 0.03,
@@ -70,6 +72,21 @@ pub fn draw_ground(world: &World, view: Rect, time: f32) {
                     draw_circle(px + 4.0 + h * 22.0, py + 6.0 + (h * 41.0) % 20.0, 1.6, c);
                     let (cx, cy) = (px + (h * 67.0) % 26.0 + 3.0, py + (h * 29.0) % 24.0 + 4.0);
                     draw_line(cx, cy, cx + 5.0, cy + 3.0, 1.0, c);
+                }
+                Tile::Desert if h > 0.5 => {
+                    // Ondulações das dunas.
+                    let c = shade(DESERT, 0.86);
+                    let (dx, dy) = (px + 3.0 + h * 14.0, py + 8.0 + (h * 41.0) % 16.0);
+                    draw_line(dx, dy, dx + 6.0, dy - 2.0, 1.2, c);
+                    draw_line(dx + 6.0, dy - 2.0, dx + 13.0, dy, 1.2, c);
+                    if h > 0.85 {
+                        draw_circle(
+                            px + (h * 61.0) % 24.0 + 4.0,
+                            py + (h * 29.0) % 22.0 + 5.0,
+                            1.4,
+                            shade(DESERT, 0.7),
+                        );
+                    }
                 }
                 Tile::Swamp if h > 0.55 => {
                     // Juncos com ponta marrom e uma poça de lama.
@@ -233,6 +250,7 @@ fn saddle_height(species: Species) -> f32 {
         Species::Ichthyosaur => 13.0,
         Species::Mosasaur => 19.0,
         Species::Kraken => 19.0,
+        Species::Kangaroo => 22.0,
         _ => 10.0,
     }
 }
@@ -402,6 +420,7 @@ fn draw_node(node: &ResourceNode, player_pos: Vec2, ground: Tile) {
         (NodeKind::MetalRock, true) => draw_metal_rock(pos, node.variant),
         (NodeKind::Pebble, true) => draw_pebbles(pos, node.variant),
         (NodeKind::Bush, alive) => draw_bush(pos, node.variant, alive),
+        (NodeKind::Cactus, alive) => draw_cactus(pos, node.variant, alive),
         _ => {}
     }
 }
@@ -413,7 +432,27 @@ fn draw_tree(pos: Vec2, variant: u8, alpha: f32, ground: Tile) {
     draw_rectangle(x - 4.0, y - 26.0, 3.0, 26.0, Color::from_rgba(132, 90, 52, 255));
 
     let leaf = |r, g, b| Color::from_rgba(r, g, b, 255).with_alpha(alpha);
-    if ground == Tile::Swamp {
+    if ground == Tile::Desert {
+        if variant.is_multiple_of(2) {
+            // Palmeira: folhas compridas saindo do topo e cocos.
+            let top = vec2(x + 3.0, y - 40.0);
+            draw_line(x, y - 26.0, top.x, top.y, 6.0, Color::from_rgba(132, 96, 58, 255));
+            for (dx, dy) in [(-22.0, 6.0), (-14.0, -8.0), (0.0, -12.0), (14.0, -8.0), (22.0, 6.0)] {
+                let tip = top + vec2(dx, dy);
+                draw_triangle(top, tip, top + vec2(dx * 0.5, dy * 0.5 + 4.0), leaf(70, 140, 60));
+            }
+            for dx in [-2.0, 3.0] {
+                draw_circle(top.x + dx, top.y + 3.0, 2.5, Color::from_rgba(110, 76, 40, 255));
+            }
+        } else {
+            // Árvore seca: galhos sem folhas.
+            let bark = leaf(120, 96, 72);
+            draw_line(x, y - 26.0, x - 2.0, y - 42.0, 4.0, bark);
+            draw_line(x - 1.0, y - 34.0, x - 14.0, y - 44.0, 2.5, bark);
+            draw_line(x - 1.0, y - 38.0, x + 12.0, y - 50.0, 2.5, bark);
+            draw_line(x + 6.0, y - 44.0, x + 14.0, y - 42.0, 1.5, bark);
+        }
+    } else if ground == Tile::Swamp {
         // Árvore do pântano: copa larga e baixa, com barba-de-velho pendurada.
         draw_ellipse(x, y - 34.0, 24.0, 12.0, 0.0, leaf(52, 74, 40));
         draw_ellipse(x - 4.0, y - 41.0, 18.0, 9.0, 0.0, leaf(72, 96, 52));
@@ -1096,6 +1135,14 @@ fn draw_creature(c: &Creature, time: f32, shadow: bool, water: Option<Color>) {
             let wave = if c.moving { c.anim_time } else { time * 0.6 };
             draw_kraken(pos, s, wave, &tint);
         }
+        // Golem selvagem parado é só mais uma rocha no deserto.
+        Species::StoneGolem if c.is_wild() && !c.moving && !c.chasing() && c.hurt <= 0.0 => {
+            draw_rock(pos, (c.id % 4) as u8)
+        }
+        Species::StoneGolem => draw_golem(pos, s, step, &tint),
+        Species::Kangaroo => draw_kangaroo(pos, s, step, &tint),
+        Species::Deathworm => draw_deathworm(pos, time + c.id as f32, c.buried, &tint),
+        Species::Mantis => draw_mantis(pos, s, step, &tint),
     }
     if let Some(color) = water {
         draw_waterline(pos, r, color, time);
@@ -1825,6 +1872,180 @@ fn draw_kraken(pos: Vec2, s: f32, wave: f32, tint: &dyn Fn(Color) -> Color) {
     draw_circle(x + 8.0 * s, y - 11.0, 2.0, BLACK);
 }
 
+/// Golem de pedra: corpanzil de rochas com olhos acesos. Parado e selvagem, é desenhado como uma rocha.
+fn draw_golem(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let stone = tint(Color::from_rgba(130, 124, 114, 255));
+    let dark = tint(Color::from_rgba(94, 90, 82, 255));
+    let glow = Color::from_rgba(255, 170, 60, 255);
+    for (lx, swing) in [(-9.0, step), (3.0, -step)] {
+        draw_rectangle(x + lx + swing * 2.0, y - 14.0, 6.0, 14.0, dark);
+    }
+    // Braço de trás
+    draw_line(x - 13.0 * s, y - 31.0, x - 17.0 * s, y - 14.0, 7.0, dark);
+    draw_circle(x - 17.0 * s, y - 13.0, 5.5, dark);
+    draw_ellipse(x, y - 26.0, 15.0, 13.0, 0.0, stone);
+    draw_circle(x - 12.0 * s, y - 33.0, 7.0, stone);
+    draw_circle(x + 12.0 * s, y - 33.0, 7.5, stone);
+    // Rachaduras com brilho de lava
+    draw_line(
+        x - 4.0,
+        y - 32.0,
+        x + 2.0,
+        y - 24.0,
+        1.2,
+        Color::new(1.0, 0.6, 0.2, 0.7),
+    );
+    draw_line(
+        x + 2.0,
+        y - 24.0,
+        x - 1.0,
+        y - 17.0,
+        1.2,
+        Color::new(1.0, 0.6, 0.2, 0.7),
+    );
+    draw_circle(x + 3.0 * s, y - 42.0, 7.0, stone);
+    for dx in [1.0, 5.0] {
+        draw_rectangle(x + dx * s - 1.0, y - 44.0, 2.5, 2.0, glow);
+    }
+    // Braço da frente
+    draw_line(x + 15.0 * s, y - 31.0, x + 19.0 * s, y - 13.0, 7.5, stone);
+    draw_circle(x + 19.0 * s, y - 12.0, 6.0, stone);
+}
+
+/// Canguru: de pé, cauda grossa no chão, patas compridas e orelhas em pé.
+fn draw_kangaroo(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let fur = tint(Color::from_rgba(178, 112, 66, 255));
+    let belly = tint(Color::from_rgba(224, 186, 142, 255));
+    let dark = tint(Color::from_rgba(130, 80, 46, 255));
+    draw_triangle(
+        vec2(x - 5.0 * s, y - 11.0),
+        vec2(x - 5.0 * s, y - 4.0),
+        vec2(x - 27.0 * s, y - 1.0),
+        fur,
+    );
+    draw_line(x - 2.0 * s, y - 6.0, x + (11.0 + step * 2.0) * s, y, 3.5, dark);
+    draw_ellipse(x - 2.0 * s, y - 12.0, 8.0, 7.0, 0.0, fur);
+    draw_ellipse(x + 1.0 * s, y - 21.0, 8.0, 12.0, 0.0, fur);
+    draw_ellipse(x + 3.0 * s, y - 19.0, 4.5, 8.0, 0.0, belly);
+    draw_line(x + 6.0 * s, y - 25.0, x + 10.0 * s, y - 19.0, 2.0, dark);
+    draw_triangle(
+        vec2(x + 3.0 * s, y - 37.0),
+        vec2(x + 6.0 * s, y - 37.0),
+        vec2(x + 2.5 * s, y - 46.0),
+        dark,
+    );
+    draw_ellipse(x + 6.0 * s, y - 34.0, 5.0, 4.5, 0.0, fur);
+    draw_ellipse(x + 10.5 * s, y - 33.0, 3.5, 2.5, 0.0, fur);
+    draw_circle(x + 7.0 * s, y - 35.0, 1.2, BLACK);
+    draw_circle(x + 13.5 * s, y - 33.5, 1.0, BLACK);
+}
+
+/// Verme da morte: enterrado, só um montinho de areia andando; exposto, um corpo segmentado com boca de dentes.
+fn draw_deathworm(pos: Vec2, time: f32, buried: bool, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let sand = shade(DESERT, 0.82);
+    draw_ellipse(x, y - 1.0, 16.0, 5.0, 0.0, sand);
+    if buried {
+        for i in 0..4 {
+            let t = (time * 1.5 + i as f32 * 0.25).fract();
+            let a = i as f32 * 1.7;
+            let p = vec2(x + a.cos() * (6.0 + t * 8.0), y - 2.0 - t * 6.0);
+            draw_circle(p.x, p.y, 1.6 * (1.0 - t), Color::new(sand.r, sand.g, sand.b, 1.0 - t));
+        }
+        return;
+    }
+    let flesh = tint(Color::from_rgba(206, 158, 126, 255));
+    let ring = tint(Color::from_rgba(156, 106, 86, 255));
+    let mut top = vec2(x, y);
+    for i in 0..7 {
+        let t = i as f32 / 6.0;
+        let sway = (time * 3.0 + t * 2.0).sin() * 4.0 * t;
+        top = vec2(x + sway, y - 4.0 - t * 40.0);
+        let r = 11.0 - t * 3.0;
+        draw_circle(top.x, top.y, r, flesh);
+        draw_line(top.x - r, top.y + 2.0, top.x + r, top.y + 2.0, 1.2, ring);
+    }
+    draw_ellipse(top.x, top.y - 5.0, 8.5, 4.0, 0.0, Color::from_rgba(96, 30, 34, 255));
+    for i in 0..6 {
+        let a = i as f32 / 6.0 * std::f32::consts::TAU;
+        let p = vec2(top.x + a.cos() * 7.0, top.y - 5.0 + a.sin() * 3.0);
+        draw_triangle(p, p + vec2(1.5, 0.0), vec2(top.x, top.y - 5.0) * 0.25 + p * 0.75, WHITE);
+    }
+}
+
+/// Louva-deus gigante: verde, cabeça triangular de olhos grandes e patas da frente em foice.
+fn draw_mantis(pos: Vec2, s: f32, step: f32, tint: &dyn Fn(Color) -> Color) {
+    let (x, y) = (pos.x, pos.y);
+    let green = tint(Color::from_rgba(112, 172, 72, 255));
+    let dark = tint(Color::from_rgba(72, 122, 46, 255));
+    let light = Color::new(0.8, 0.95, 0.7, 0.6);
+    for (hip, foot, swing) in [(-6.0, -12.0, step), (-2.0, 4.0, -step), (-9.0, -4.0, -step)] {
+        draw_line(x + hip * s, y - 11.0, x + (foot + swing * 2.0) * s, y, 1.5, dark);
+    }
+    draw_ellipse(x - 9.0 * s, y - 12.0, 11.0, 5.0, 0.0, green);
+    draw_ellipse(x - 8.0 * s, y - 15.0, 10.0, 3.0, 0.0, light);
+    draw_line(x - 1.0 * s, y - 13.0, x + 6.0 * s, y - 25.0, 4.0, green);
+    draw_line(x + 2.0 * s, y - 14.0, x + 5.0 * s, y, 1.5, dark);
+    draw_triangle(
+        vec2(x + 4.0 * s, y - 28.0),
+        vec2(x + 12.0 * s, y - 28.0),
+        vec2(x + 8.0 * s, y - 21.0),
+        green,
+    );
+    for dx in [4.5, 11.5] {
+        draw_circle(x + dx * s, y - 28.0, 2.2, dark);
+    }
+    draw_line(x + 6.0 * s, y - 29.0, x + 2.0 * s, y - 38.0, 1.0, dark);
+    draw_line(x + 10.0 * s, y - 29.0, x + 14.0 * s, y - 38.0, 1.0, dark);
+    // Foices
+    let (elbow, tip) = (vec2(x + 13.0 * s, y - 17.0), vec2(x + 10.0 * s, y - 27.0));
+    draw_line(x + 6.0 * s, y - 22.0, elbow.x, elbow.y, 2.5, dark);
+    draw_line(elbow.x, elbow.y, tip.x, tip.y, 2.0, dark);
+    for i in 1..3 {
+        let p = elbow.lerp(tip, i as f32 / 3.0);
+        draw_line(p.x, p.y, p.x - 2.0 * s, p.y + 1.0, 1.0, dark);
+    }
+}
+
+/// Cacto (saguaro): tronco com dois braços e espinhos; colhido, sobra um toco.
+fn draw_cactus(pos: Vec2, variant: u8, alive: bool) {
+    let (x, y) = (pos.x, pos.y);
+    let green = Color::from_rgba(76, 142, 76, 255);
+    let dark = Color::from_rgba(52, 108, 56, 255);
+    draw_ellipse(x, y, 10.0, 4.0, 0.0, SHADOW);
+    if !alive {
+        draw_rectangle(x - 4.0, y - 6.0, 8.0, 6.0, dark);
+        return;
+    }
+    let h = 30.0 + variant as f32 * 3.0;
+    draw_rectangle(x - 4.5, y - h, 9.0, h, green);
+    draw_circle(x, y - h, 4.5, green);
+    let (left, right) = (14.0 + (variant % 2) as f32 * 4.0, 20.0 - (variant % 3) as f32 * 3.0);
+    draw_rectangle(x - 12.0, y - left, 8.0, 4.0, green);
+    draw_rectangle(x - 12.0, y - left - 9.0, 4.0, 10.0, green);
+    draw_circle(x - 10.0, y - left - 9.0, 2.0, green);
+    draw_rectangle(x + 4.0, y - right, 8.0, 4.0, green);
+    draw_rectangle(x + 8.0, y - right - 8.0, 4.0, 9.0, green);
+    draw_circle(x + 10.0, y - right - 8.0, 2.0, green);
+    draw_line(x - 1.5, y - h + 2.0, x - 1.5, y - 2.0, 1.0, dark);
+    for i in 0..5 {
+        let sy = y - 6.0 - i as f32 * 5.5;
+        draw_line(
+            x + 4.5,
+            sy,
+            x + 6.5,
+            sy - 1.0,
+            0.8,
+            Color::from_rgba(240, 236, 200, 255),
+        );
+    }
+    if variant == 3 {
+        draw_circle(x, y - h - 3.0, 2.2, Color::from_rgba(236, 110, 150, 255));
+    }
+}
+
 /// Criatura deitada: morta (olho em X) ou desmaiada (olho fechado).
 fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
     let (x, y) = (pos.x, pos.y);
@@ -1846,6 +2067,10 @@ fn draw_lying(species: Species, pos: Vec2, s: f32, asleep: bool) {
         Species::Ichthyosaur => Color::from_rgba(84, 120, 160, 255),
         Species::Mosasaur => Color::from_rgba(58, 92, 100, 255),
         Species::Kraken => Color::from_rgba(160, 56, 78, 255),
+        Species::StoneGolem => Color::from_rgba(118, 112, 104, 255),
+        Species::Kangaroo => Color::from_rgba(160, 102, 60, 255),
+        Species::Deathworm => Color::from_rgba(190, 146, 118, 255),
+        Species::Mantis => Color::from_rgba(100, 156, 66, 255),
     };
     let r = species.radius();
     draw_ellipse(x, y - 4.0, r + 2.0, r * 0.45, 0.0, col);

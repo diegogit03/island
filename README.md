@@ -6,7 +6,7 @@
 
 Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabrique ferramentas, construa, domestique dinossauros e jogue com amigos na rede local. Visão 3/4 de cima, com o personagem virando só para a esquerda ou para a direita. Roda no desktop.
 
-## O que já tem (v0.8 — expansão dos biomas; falta o deserto)
+## O que já tem (v0.8 — expansão dos biomas)
 
 - Ilha procedural com praia, água rasa e água funda
 - Coleta de madeira, palha, pedra, sílex e frutinhas
@@ -19,6 +19,7 @@ Survival 2D inspirado em **ARK** com elementos de MMORPG: colete recursos, fabri
 - Domesticação: derrube dinos com clava ou estilingue, alimente-os desacordados e monte num raptor com sela
 - **Criaturas voadoras**: pteranodonte (o mais rápido) e argentavis (carrega mais peso), montáveis com sela; voe sobre a ilha e o mar
 - Peso de carga dos dinos: carregado demais, o dino fica lento e não decola
+- **Bioma de deserto** no oeste: golem de pedra disfarçado de rocha, canguru (montado, pula), louva-deus e o verme da morte, que anda debaixo da areia
 - **Mar**: jangada para navegar e fauna marinha domesticável e montável (megalodonte, ictiossauro, mosassauro e kraken)
 - **Bioma de pântano** no leste: beelzebufo (montado, pula), sarcosuchus (montável, nada rápido) e titanoboa, domesticáveis; lagoas com piranhas
 - **Bioma de gelo** no norte da ilha: mamutes (montados, coletam madeira), smilodons (montados, tiram couro) e lobos-cinzentos em alcateia, todos domesticáveis
@@ -52,7 +53,7 @@ Baixe o pacote do seu sistema na página de [Releases](https://github.com/diegog
 | Tab / I | Inventário, personagem (atributos) e crafting/engramas |
 | Q / Ctrl+Q | Largar 1 item / a pilha |
 | F | Interagir: pegar itens, abrir porta/baú/fogueira, usar bancada, abrir dino (alimentar/comandar); montado: desmontar |
-| Espaço | Montado: voador decola/pousa; beelzebufo pula |
+| Espaço | Montado: voador decola/pousa; beelzebufo e canguru pulam |
 | F5 | Salvar |
 | H | Mostrar/esconder ajuda |
 | Enter | Chat |

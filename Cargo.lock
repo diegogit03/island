@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "island"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bincode",
  "macroquad",

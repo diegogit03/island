@@ -161,6 +161,15 @@ pub const RECIPES: &[Recipe] = &[
         engram_cost: 10,
     },
     Recipe {
+        output: ItemId::KangarooSaddle,
+        count: 1,
+        inputs: &[(ItemId::Hide, 20), (ItemId::Thatch, 20), (ItemId::Wood, 10)],
+        secs: 6.0,
+        station: BENCH,
+        level: 9,
+        engram_cost: 8,
+    },
+    Recipe {
         output: ItemId::SmilodonSaddle,
         count: 1,
         inputs: &[(ItemId::Hide, 25), (ItemId::Thatch, 15), (ItemId::Wood, 10)],

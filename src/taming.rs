@@ -18,6 +18,8 @@ pub const NARCOTIC_THRESHOLD: f32 = 0.5;
 pub enum Diet {
     Herbivore,
     Carnivore,
+    /// Come pedra (golem de pedra).
+    Mineral,
 }
 
 /// Pontos de domesticação que cada comida vale para a dieta (`None` = não come).
@@ -26,6 +28,8 @@ pub fn food_value(diet: Diet, item: ItemId) -> Option<f32> {
         (Diet::Herbivore, ItemId::Berry) => Some(10.0),
         (Diet::Carnivore, ItemId::RawMeat) => Some(20.0),
         (Diet::Carnivore, ItemId::CookedMeat) => Some(10.0),
+        (Diet::Mineral, ItemId::MetalOre) => Some(20.0),
+        (Diet::Mineral, ItemId::Stone) => Some(8.0),
         _ => None,
     }
 }
@@ -35,6 +39,7 @@ pub fn preferred_foods(diet: Diet) -> &'static [ItemId] {
     match diet {
         Diet::Herbivore => &[ItemId::Berry],
         Diet::Carnivore => &[ItemId::RawMeat, ItemId::CookedMeat],
+        Diet::Mineral => &[ItemId::MetalOre, ItemId::Stone],
     }
 }
 

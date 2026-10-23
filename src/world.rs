@@ -23,6 +23,8 @@ pub enum Tile {
     Swamp,
     /// Lagoa do pântano (rasa, dá para andar e beber; tem piranhas).
     SwampWater,
+    /// Areia do deserto, a oeste (os oásis são água rasa).
+    Desert,
 }
 
 impl Tile {
@@ -33,7 +35,7 @@ impl Tile {
     pub fn is_land(self) -> bool {
         matches!(
             self,
-            Tile::Sand | Tile::Grass | Tile::Mountain | Tile::Snow | Tile::Swamp
+            Tile::Sand | Tile::Grass | Tile::Mountain | Tile::Snow | Tile::Swamp | Tile::Desert
         )
     }
 
@@ -50,6 +52,7 @@ impl Tile {
         match self {
             Tile::ShallowWater | Tile::SwampWater => 0.55,
             Tile::Swamp => 0.85,
+            Tile::Desert => 0.9,
             Tile::Sand => 0.9,
             Tile::Mountain => 0.85,
             Tile::Snow => 0.9,
@@ -65,6 +68,8 @@ pub enum NodeKind {
     Pebble,
     Bush,
     MetalRock,
+    /// Cacto do deserto: palha e um pouco de água a cada golpe.
+    Cactus,
 }
 
 impl NodeKind {
@@ -76,6 +81,7 @@ impl NodeKind {
             NodeKind::Pebble => 1,
             NodeKind::Bush => 3,
             NodeKind::MetalRock => 12,
+            NodeKind::Cactus => 4,
         }
     }
 
@@ -86,6 +92,7 @@ impl NodeKind {
             NodeKind::Pebble => 45.0,
             NodeKind::Bush => 60.0,
             NodeKind::MetalRock => 180.0,
+            NodeKind::Cactus => 90.0,
         }
     }
 
@@ -94,6 +101,7 @@ impl NodeKind {
         match self {
             NodeKind::Tree => 9.0,
             NodeKind::Rock | NodeKind::MetalRock => 16.0,
+            NodeKind::Cactus => 7.0,
             NodeKind::Pebble | NodeKind::Bush => 0.0,
         }
     }
@@ -192,7 +200,73 @@ impl World {
         world.scatter_nodes();
         world.freeze_north();
         world.flood_east();
+        world.dry_west();
+        world.scatter_desert_extras();
         world
+    }
+
+    /// Bioma de deserto: a grama e a areia do oeste viram deserto, com oásis (água rasa) onde não há nós.
+    /// Como os outros biomas, roda depois de espalhar os nós e não consome RNG.
+    fn dry_west(&mut self) {
+        let occupied: std::collections::HashSet<(i32, i32)> = self
+            .nodes
+            .iter()
+            .map(|n| ((n.pos.x / TILE).floor() as i32, (n.pos.y / TILE).floor() as i32))
+            .collect();
+        let spawn = self.spawn;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let i = y * self.width + x;
+                if !matches!(self.tiles[i], Tile::Grass | Tile::Sand) {
+                    continue;
+                }
+                let nx = x as f32 / self.width as f32 * 2.0 - 1.0;
+                let noise = fbm(x as f32 / 18.0, y as f32 / 18.0, self.seed.wrapping_add(67), 3);
+                let center = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
+                let near_snow = self.cold(x, y) < -0.12;
+                if nx + (noise - 0.5) * 0.5 > -0.32 || near_snow || center.distance(spawn) < TILE * 12.0 {
+                    continue;
+                }
+                let oasis = fbm(x as f32 / 5.0, y as f32 / 5.0, self.seed.wrapping_add(71), 2);
+                self.tiles[i] = if oasis > 0.68 && !occupied.contains(&(x as i32, y as i32)) {
+                    Tile::ShallowWater
+                } else {
+                    Tile::Desert
+                };
+            }
+        }
+    }
+
+    /// Cactos e rochas do deserto, com RNG próprio e no fim da lista (como `scatter_mountain_extras`).
+    fn scatter_desert_extras(&mut self) {
+        let mut rng = Rng::new(self.seed.wrapping_add(73));
+        for y in 0..self.height as i32 {
+            for x in 0..self.width as i32 {
+                if self.tile(x, y) != Tile::Desert {
+                    continue;
+                }
+                let kind = if rng.chance(0.05) {
+                    NodeKind::Cactus
+                } else if rng.chance(0.01) {
+                    NodeKind::Rock
+                } else {
+                    continue;
+                };
+                let center = vec2((x as f32 + 0.5) * TILE, (y as f32 + 0.5) * TILE);
+                if self.nodes.iter().any(|n| n.pos.distance(center) < TILE) {
+                    continue;
+                }
+                let jitter = vec2(rng.range(-6.0, 6.0), rng.range(-6.0, 6.0));
+                self.nodes.push(ResourceNode {
+                    kind,
+                    pos: center + jitter,
+                    hp: kind.max_hp(),
+                    respawn_timer: 0.0,
+                    variant: (rng.next_u64() % 4) as u8,
+                    shake: 0.0,
+                });
+            }
+        }
     }
 
     /// Bioma de pântano: a grama e a areia do leste viram lama, com lagoas onde não há nós.
@@ -547,6 +621,8 @@ mod tests {
         assert_eq!(world.tile_at(world.spawn), Tile::Sand);
         let count = |t: Tile| world.tiles.iter().filter(|&&x| x == t).count();
         assert!(count(Tile::Snow) > 100 && count(Tile::Swamp) > 100 && count(Tile::SwampWater) > 20);
+        assert!(count(Tile::Desert) > 100, "deserto a oeste");
+        assert!(world.nodes.iter().any(|n| n.kind == NodeKind::Cactus));
         assert!(!world.blocked(world.spawn, 7.0));
         let count = |kind| world.nodes.iter().filter(|n| n.kind == kind).count();
         assert!(count(NodeKind::Tree) > 50);

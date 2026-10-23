@@ -67,7 +67,7 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
 - Decisão: continuar no macroquad (a rede independe da engine; Bevy exigiria reescrever render e UI)
 - Ainda não: predição no cliente (pensado para LAN; pela internet a latência aparece), tribos separadas e PvP
 
-## 🚧 v0.8 — Expansão dos biomas
+## ✅ v0.8 — Expansão dos biomas
 - ✅ Criaturas voadoras montáveis com sela: **pteranodonte** (o mais rápido do jogo, carrega pouco) e **argentavis** (velocidade média, carrega muito; caça e pousa para morder)
   - Espaço decola/pousa; no ar ignora árvores, pedras, construções e água; predadores do chão não alcançam quem voa
   - Pouso forçado em terra ao morrer, sair do jogo ou perder a montaria no ar
@@ -86,7 +86,11 @@ e rede antes do polimento (arte, áudio e conteúdo novo são feitos já sobre a
   - **Jangada**: fabricada sem bancada, posta na água com o botão direito; F sobe/desce (só perto da margem), Shift rema mais rápido; dá para bater, atirar e beber de cima dela
   - **Ictiossauro** (passivo, o mais rápido no mar), **Megalodonte** (agressivo), **Kraken** e **Mosassauro** (agressivos, em mar aberto, longe da costa): todos domesticáveis e montáveis com sela
   - Selvagens do mar ficam na água funda; montado no mar, só desce perto da margem ou de uma jangada
-- Bioma de deserto (sugestão: oeste da ilha, o lado ainda livre): areia, dunas, cactos e oásis, com fauna própria
+- ✅ Bioma de deserto no oeste da ilha (dunas, cactos, palmeiras, árvores secas e oásis); bater num cacto mata um pouco a sede:
+  - **Golem de pedra** (territorial): parado, parece uma rocha; revida quando atacado. Domesticável com pedra ou minério de metal; abatido, vira pedra
+  - **Canguru** (passivo): domesticável e montável; Espaço pula
+  - **Louva-deus** (agressivo, domesticável)
+  - **Verme da morte** (agressivo, não domesticável): anda enterrado, ninguém acerta; só sai da areia para morder
 
 ## v0.9 — NPCs e tribos
 - Acampamentos de NPCs espalhados pelo mapa (cabanas e fogueira), onde dá para recrutar NPCs para a sua tribo

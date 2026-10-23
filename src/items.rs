@@ -36,6 +36,7 @@ pub enum ItemId {
     IchthyosaurSaddle,
     MosasaurSaddle,
     KrakenSaddle,
+    KangarooSaddle,
     Raft,
     Campfire,
     Forge,
@@ -62,7 +63,7 @@ pub struct FoodEffect {
 
 impl ItemId {
     #[cfg(test)]
-    pub const ALL: [ItemId; 38] = [
+    pub const ALL: [ItemId; 39] = [
         ItemId::Wood,
         ItemId::Thatch,
         ItemId::Stone,
@@ -93,6 +94,7 @@ impl ItemId {
         ItemId::IchthyosaurSaddle,
         ItemId::MosasaurSaddle,
         ItemId::KrakenSaddle,
+        ItemId::KangarooSaddle,
         ItemId::Raft,
         ItemId::Campfire,
         ItemId::Forge,
@@ -136,6 +138,7 @@ impl ItemId {
             ItemId::IchthyosaurSaddle => "Sela de Ictiossauro",
             ItemId::MosasaurSaddle => "Sela de Mosassauro",
             ItemId::KrakenSaddle => "Sela de Kraken",
+            ItemId::KangarooSaddle => "Sela de Canguru",
             ItemId::Raft => "Jangada",
             ItemId::Campfire => "Fogueira",
             ItemId::Workbench => "Bancada",
@@ -169,6 +172,7 @@ impl ItemId {
             | ItemId::IchthyosaurSaddle
             | ItemId::MosasaurSaddle
             | ItemId::KrakenSaddle
+            | ItemId::KangarooSaddle
             | ItemId::Raft => 1,
             ItemId::Campfire | ItemId::Forge | ItemId::Workbench | ItemId::StorageBox => 5,
             ItemId::WoodFoundation | ItemId::WoodWall | ItemId::WoodDoor => 20,
@@ -204,6 +208,7 @@ impl ItemId {
             ItemId::IchthyosaurSaddle => 8.0,
             ItemId::MosasaurSaddle => 18.0,
             ItemId::KrakenSaddle => 14.0,
+            ItemId::KangarooSaddle => 6.0,
             ItemId::Raft => 20.0,
             ItemId::WoodWall | ItemId::WoodDoor => 3.0,
             ItemId::WoodFoundation => 4.0,

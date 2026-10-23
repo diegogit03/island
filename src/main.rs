@@ -208,7 +208,7 @@ fn start_session(choice: Choice, name: &str) -> Result<(Connection, Option<Serve
 /// _MOUNTAIN, _COOP (um segundo jogador "Bia" ao lado, com mensagem no chat), _FLY (voando de
 /// pteranodonte com um argentavis), _CARGO (painel de carga do argentavis), _ICE (bioma de gelo,
 /// montado num mamute), _SWAMP (pântano, montado num sarcosuchus entre piranhas), _SEA (jangada no mar
-/// com fauna marinha) e _SEA_RIDE (montado num mosassauro).
+/// com fauna marinha), _SEA_RIDE (montado num mosassauro) e _DESERT (montado num canguru no deserto).
 /// Com ISLAND_SHOT_JOIN=ip:porta, entra num servidor já rodando em vez de subir um local;
 /// ISLAND_SHOT_MENU mostra o menu principal.
 async fn screenshot(path: &str) {
@@ -259,6 +259,9 @@ async fn screenshot(path: &str) {
         }
         if env("ISLAND_SHOT_SWAMP").is_some() {
             sim.demo_swamp();
+        }
+        if env("ISLAND_SHOT_DESERT").is_some() {
+            sim.demo_desert();
         }
         if env("ISLAND_SHOT_SEA").is_some() {
             sim.demo_sea();

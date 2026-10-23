@@ -4,7 +4,9 @@
 //! árvores, pedras e construções. Fauna da era do gelo (mamute, smilodon, lobo) vive na neve, ao norte.
 //! Mamute e smilodon montados coletam (madeira / couro). No pântano (leste): anfíbios (beelzebufo,
 //! sarcosuchus, titanoboa) andam na lama e nadam nas lagoas; piranhas vivem só nas lagoas, em cardume.
-//! No mar: megalodonte, ictiossauro, mosassauro e kraken (os dois últimos em mar aberto), todos montáveis. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
+//! No mar: megalodonte, ictiossauro, mosassauro e kraken (os dois últimos em mar aberto), todos montáveis.
+//! No deserto (oeste): golem de pedra (parado, disfarçado de rocha), canguru (pula), louva-deus e o verme
+//! da morte, que anda enterrado e só sai da areia para morder. Criaturas mortas viram carcaças que o jogador coleta como um nó de recurso.
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -60,6 +62,10 @@ pub enum Species {
     Ichthyosaur,
     Mosasaur,
     Kraken,
+    StoneGolem,
+    Kangaroo,
+    Deathworm,
+    Mantis,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +86,8 @@ pub enum Terrain {
     Water,
     /// Mar (água rasa e funda); selvagens ficam na funda.
     Sea,
+    /// Debaixo da areia do deserto (verme da morte): não colide com nada, só não sai do deserto.
+    Burrower,
 }
 
 /// Duração e altura (em `altitude`) do salto do beelzebufo.
@@ -97,7 +105,7 @@ pub enum MountHarvest {
 }
 
 impl Species {
-    pub const ALL: [Species; 17] = [
+    pub const ALL: [Species; 21] = [
         Species::Dodo,
         Species::Trilobite,
         Species::Dilophosaur,
@@ -115,6 +123,10 @@ impl Species {
         Species::Ichthyosaur,
         Species::Mosasaur,
         Species::Kraken,
+        Species::StoneGolem,
+        Species::Kangaroo,
+        Species::Deathworm,
+        Species::Mantis,
     ];
 
     pub fn name(self) -> &'static str {
@@ -136,6 +148,10 @@ impl Species {
             Species::Ichthyosaur => "Ictiossauro",
             Species::Mosasaur => "Mosassauro",
             Species::Kraken => "Kraken",
+            Species::StoneGolem => "Golem de Pedra",
+            Species::Kangaroo => "Canguru",
+            Species::Deathworm => "Verme da Morte",
+            Species::Mantis => "Louva-deus",
         }
     }
 
@@ -150,6 +166,9 @@ impl Species {
             Species::Mammoth => Temperament::Territorial,
             Species::Sarcosuchus | Species::Titanoboa | Species::Piranha => Temperament::Aggressive,
             Species::Megalodon | Species::Mosasaur | Species::Kraken => Temperament::Aggressive,
+            Species::Deathworm | Species::Mantis => Temperament::Aggressive,
+            Species::Kangaroo => Temperament::Passive,
+            Species::StoneGolem => Temperament::Territorial,
         }
     }
 
@@ -171,6 +190,7 @@ impl Species {
             Species::Beelzebufo | Species::Sarcosuchus | Species::Titanoboa => Terrain::Amphibious,
             Species::Piranha => Terrain::Water,
             Species::Megalodon | Species::Ichthyosaur | Species::Mosasaur | Species::Kraken => Terrain::Sea,
+            Species::Deathworm => Terrain::Burrower,
             _ => Terrain::Land,
         }
     }
@@ -186,7 +206,17 @@ impl Species {
 
     /// Montado, Espaço pula (por cima de obstáculos e água).
     pub fn leaps(self) -> bool {
-        self == Species::Beelzebufo
+        matches!(self, Species::Beelzebufo | Species::Kangaroo)
+    }
+
+    /// Anda enterrado e só aparece para morder (verme da morte).
+    pub fn burrows(self) -> bool {
+        self.terrain() == Terrain::Burrower
+    }
+
+    /// Selvagens vagam quando à toa; o golem fica parado, parecendo uma rocha.
+    pub fn wanders(self) -> bool {
+        self != Species::StoneGolem
     }
 
     /// Quantos nascem juntos (alcateia, cardume).
@@ -219,6 +249,10 @@ impl Species {
             Species::Ichthyosaur => 90.0,
             Species::Mosasaur => 420.0,
             Species::Kraken => 320.0,
+            Species::StoneGolem => 500.0,
+            Species::Kangaroo => 110.0,
+            Species::Deathworm => 260.0,
+            Species::Mantis => 110.0,
         }
     }
 
@@ -242,6 +276,10 @@ impl Species {
             Species::Ichthyosaur => 70.0,
             Species::Mosasaur => 320.0,
             Species::Kraken => 260.0,
+            Species::StoneGolem => 300.0,
+            Species::Kangaroo => 90.0,
+            Species::Deathworm => 220.0,
+            Species::Mantis => 100.0,
         }
     }
 
@@ -266,6 +304,10 @@ impl Species {
             Species::Ichthyosaur => (60.0, 230.0),
             Species::Mosasaur => (50.0, 160.0),
             Species::Kraken => (50.0, 175.0),
+            Species::StoneGolem => (25.0, 70.0),
+            Species::Kangaroo => (50.0, 190.0),
+            Species::Deathworm => (60.0, 150.0),
+            Species::Mantis => (60.0, 190.0),
         }
     }
 
@@ -288,6 +330,10 @@ impl Species {
             Species::Ichthyosaur => 13.0,
             Species::Mosasaur => 26.0,
             Species::Kraken => 22.0,
+            Species::StoneGolem => 16.0,
+            Species::Kangaroo => 11.0,
+            Species::Deathworm => 14.0,
+            Species::Mantis => 11.0,
         }
     }
 
@@ -306,6 +352,9 @@ impl Species {
             Species::Megalodon => Some((22.0, 1.2, 16.0, 260.0)),
             Species::Mosasaur => Some((35.0, 2.0, 22.0, 220.0)),
             Species::Kraken => Some((26.0, 1.6, 26.0, 200.0)),
+            Species::StoneGolem => Some((30.0, 2.2, 14.0, 110.0)),
+            Species::Deathworm => Some((24.0, 1.6, 18.0, 260.0)),
+            Species::Mantis => Some((16.0, 0.8, 14.0, 220.0)),
             _ => None,
         }
     }
@@ -322,6 +371,8 @@ impl Species {
             Species::Sarcosuchus | Species::Titanoboa | Species::Megalodon => 7,
             Species::Ichthyosaur => 5,
             Species::Mosasaur | Species::Kraken => 10,
+            Species::StoneGolem | Species::Deathworm => 8,
+            Species::Kangaroo | Species::Mantis => 5,
         }
     }
 
@@ -339,6 +390,7 @@ impl Species {
                 | Species::Megalodon
                 | Species::Mosasaur
                 | Species::Kraken
+                | Species::Deathworm
         )
     }
 
@@ -358,7 +410,12 @@ impl Species {
             | Species::Megalodon
             | Species::Ichthyosaur
             | Species::Mosasaur
-            | Species::Kraken => Diet::Carnivore,
+            | Species::Kraken
+            | Species::Deathworm
+            | Species::Mantis => Diet::Carnivore,
+            Species::Kangaroo => Diet::Herbivore,
+            // O golem come pedra (e prefere minério de metal).
+            Species::StoneGolem => Diet::Mineral,
         }
     }
 
@@ -382,6 +439,10 @@ impl Species {
             Species::Ichthyosaur => Some(120.0),
             Species::Mosasaur => Some(400.0),
             Species::Kraken => Some(320.0),
+            Species::StoneGolem => Some(200.0),
+            Species::Kangaroo => Some(140.0),
+            Species::Deathworm => None,
+            Species::Mantis => Some(150.0),
         }
     }
 
@@ -399,6 +460,7 @@ impl Species {
             Species::Ichthyosaur => Some(ItemId::IchthyosaurSaddle),
             Species::Mosasaur => Some(ItemId::MosasaurSaddle),
             Species::Kraken => Some(ItemId::KrakenSaddle),
+            Species::Kangaroo => Some(ItemId::KangarooSaddle),
             _ => None,
         }
     }
@@ -432,6 +494,10 @@ impl Species {
             Species::Ichthyosaur => 100.0,
             Species::Mosasaur => 600.0,
             Species::Kraken => 300.0,
+            Species::StoneGolem => 500.0,
+            Species::Kangaroo => 200.0,
+            Species::Deathworm => 0.0,
+            Species::Mantis => 90.0,
         }
     }
 
@@ -455,6 +521,10 @@ impl Species {
             Species::Ichthyosaur => 8,
             Species::Mosasaur => 24,
             Species::Kraken => 16,
+            Species::StoneGolem => 20,
+            Species::Kangaroo => 14,
+            Species::Deathworm => 2,
+            Species::Mantis => 8,
         }
     }
 
@@ -478,6 +548,10 @@ impl Species {
             Species::Ichthyosaur => 8,
             Species::Mosasaur => 2,
             Species::Kraken => 2,
+            Species::StoneGolem => 4,
+            Species::Kangaroo => 8,
+            Species::Deathworm => 3,
+            Species::Mantis => 6,
         }
     }
 
@@ -499,6 +573,7 @@ impl Species {
             Species::Mosasaur | Species::Kraken => [(0, 0), (10, 0), (-10, 0), (0, 10), (0, -10)]
                 .iter()
                 .all(|&(dx, dy)| world.tile(x + dx, y + dy) == Tile::DeepWater),
+            Species::StoneGolem | Species::Kangaroo | Species::Deathworm | Species::Mantis => tile == Tile::Desert,
         }
     }
 
@@ -517,6 +592,8 @@ impl Species {
                 let probes = [pos, pos + vec2(-r, 0.0), pos + vec2(r, 0.0)];
                 return inside && probes.iter().all(|&p| world.tile_at(p).is_sea());
             }
+            // Debaixo da areia não há obstáculo.
+            Terrain::Burrower => return tile == Tile::Desert,
         };
         tile_ok && !world.blocked(pos, self.radius())
     }
@@ -592,6 +669,8 @@ pub struct Creature {
     pub mounted: bool,
     /// No ar: colide só com a borda do mapa e não leva golpes corpo a corpo.
     pub flying: bool,
+    /// Debaixo da areia (verme da morte): ninguém acerta.
+    pub buried: bool,
     /// Altura desenhada (0 = chão, 1 = voando); acompanha `flying` aos poucos.
     pub altitude: f32,
     /// Salto em andamento (s restantes); durante o salto, `flying` fica ligado.
@@ -662,6 +741,7 @@ impl Creature {
             owner: None,
             mounted: false,
             flying: false,
+            buried: species.burrows(),
             altitude: 0.0,
             leap: 0.0,
             leap_cooldown: 0.0,
@@ -703,6 +783,10 @@ impl Creature {
 
     pub fn is_alive(&self) -> bool {
         self.corpse.is_none()
+    }
+
+    pub fn chasing(&self) -> bool {
+        self.state == State::Chase
     }
 
     pub fn is_tamed(&self) -> bool {
@@ -796,6 +880,7 @@ impl Creature {
             self.health = 0.0;
             self.knocked_out = false;
             self.flying = false;
+            self.buried = false;
             self.taming = None;
             self.state = State::Idle;
             self.corpse = Some(Corpse {
@@ -834,8 +919,9 @@ impl Creature {
     fn knock_out(&mut self) {
         self.torpor = self.max_torpor();
         self.knocked_out = true;
-        // Voador desmaiado cai (selvagens só voam sobre terra ou água rasa).
+        // Voador desmaiado cai (selvagens só voam sobre terra ou água rasa); verme desmaiado fica exposto.
         self.flying = false;
+        self.buried = false;
         self.state = State::Idle;
         self.moving = false;
         if self.inventory.is_none() {
@@ -924,6 +1010,12 @@ impl Creature {
             }
         }
 
+        // O verme da morte anda enterrado e só sai da areia quando a presa está quase ao alcance.
+        if self.species.burrows() {
+            let reach = self.species.attack().map_or(0.0, |a| a.2) + 24.0;
+            self.buried = !(self.state == State::Chase && dist - self.species.radius() <= reach);
+        }
+
         // Voadores selvagens decolam para se mover: vagando devagar, fugindo/caçando mais rápido.
         let fly = self.species.fly_speed();
         let (walk, run, chase) = match fly {
@@ -949,7 +1041,7 @@ impl Creature {
         }
         match self.state {
             State::Idle => {
-                if self.state_timer <= 0.0 {
+                if self.state_timer <= 0.0 && self.species.wanders() {
                     let range = if fly.is_some() { 300.0 } else { 120.0 };
                     let offset = vec2(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)) * range;
                     self.wander_target = self.pos + offset;
@@ -1771,6 +1863,42 @@ mod tests {
         for c in creatures.iter().filter(|c| c.species.terrain() == Terrain::Sea) {
             assert_eq!(world.tile_at(c.pos), Tile::DeepWater, "{:?}", c.species);
         }
+    }
+
+    #[test]
+    fn desert_fauna_rules() {
+        let world = world();
+        let sand = find_spot(&world, |p| {
+            [vec2(0.0, 0.0), vec2(60.0, 0.0), vec2(-60.0, 0.0)]
+                .iter()
+                .all(|&o| world.tile_at(p + o) == Tile::Desert && !world.blocked(p + o, 16.0))
+        });
+        // Golem disfarçado: não sai do lugar à toa, mas revida.
+        let mut golem = Creature::new(Species::StoneGolem, sand);
+        let calm = run(&mut golem, &world, sand + vec2(5000.0, 0.0), 20.0);
+        assert!(calm.is_empty() && golem.pos == sand, "parado feito rocha");
+        golem.take_hit(5.0, 0.0, sand + vec2(30.0, 0.0));
+        assert_eq!(golem.state, State::Chase);
+        assert_eq!(Species::StoneGolem.diet(), Diet::Mineral);
+        assert!(taming::food_value(Diet::Mineral, ItemId::MetalOre) > taming::food_value(Diet::Mineral, ItemId::Stone));
+        // Canguru pula e é montável; louva-deus domesticável; verme não.
+        assert!(Species::Kangaroo.leaps() && Species::Kangaroo.saddle().is_some());
+        assert!(Species::Mantis.taming_food().is_some() && Species::StoneGolem.taming_food().is_some());
+        assert!(Species::Deathworm.taming_food().is_none());
+        assert!(
+            !Species::Deathworm.can_stand(&world, world.spawn),
+            "verme não sai do deserto"
+        );
+
+        // Verme enterrado longe, sai da areia para morder.
+        let mut worm = Creature::new(Species::Deathworm, sand);
+        assert!(worm.buried);
+        run(&mut worm, &world, sand + vec2(2000.0, 0.0), 1.0);
+        assert!(worm.buried, "longe de todos, enterrado");
+        let prey = sand + vec2(60.0, 0.0);
+        let events = run(&mut worm, &world, prey, 4.0);
+        assert!(events.iter().any(|e| matches!(e, Event::Bite { .. })), "mordeu");
+        assert!(!worm.buried, "exposto ao morder");
     }
 
     #[test]

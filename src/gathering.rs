@@ -53,6 +53,8 @@ fn roll_base_yield(kind: NodeKind, tool: Option<ToolKind>, rng: &mut Rng) -> Vec
             push(ItemId::Stone, 1);
             push(ItemId::Flint, rng.range_u32(2, 3));
         }
+        (NodeKind::Cactus, None) => push(ItemId::Thatch, 1),
+        (NodeKind::Cactus, Some(_)) => push(ItemId::Thatch, rng.range_u32(2, 3)),
         // Metal só sai bem com picareta.
         (NodeKind::MetalRock, Some(ToolKind::Pickaxe)) => {
             push(ItemId::MetalOre, rng.range_u32(1, 2));
@@ -89,6 +91,18 @@ pub fn roll_smilodon_corpse(corpse: Species, rng: &mut Rng) -> Vec<(ItemId, u32)
 
 /// O que cada golpe numa carcaça rende. Machado favorece carne; picareta, couro.
 pub fn roll_corpse_yield(species: Species, tool: Option<ToolKind>, tier: u32, rng: &mut Rng) -> Vec<(ItemId, u32)> {
+    if species == Species::StoneGolem {
+        // Golem abatido vira pedra; com picareta sai sílex e às vezes metal.
+        let drops = match tool {
+            Some(ToolKind::Pickaxe) => vec![
+                (ItemId::Stone, rng.range_u32(2, 3)),
+                (ItemId::Flint, rng.range_u32(1, 2)),
+                (ItemId::MetalOre, u32::from(rng.chance(0.5))),
+            ],
+            _ => vec![(ItemId::Stone, rng.range_u32(3, 5))],
+        };
+        return apply_tier(drops.into_iter().filter(|&(_, n)| n > 0).collect(), tier);
+    }
     let big = u32::from(species.is_big());
     let tool = tool.filter(|t| *t != ToolKind::Spear);
     let (meat, hide) = match tool {

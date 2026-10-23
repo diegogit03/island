@@ -14,7 +14,7 @@ use crate::save::BagSave;
 use crate::vitals::Vitals;
 
 /// Cliente e servidor precisam da mesma versão para conversar.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Porta UDP dos anúncios de servidor na LAN.
 pub const DISCOVERY_PORT: u16 = 7778;
@@ -192,6 +192,7 @@ pub struct CreatureView {
     pub lunge: f32,
     pub mounted: bool,
     pub flying: bool,
+    pub buried: bool,
     pub altitude: f32,
     pub chasing: bool,
     /// Tem sela (o inventário só vai junto quando o painel dela está aberto).
@@ -214,6 +215,7 @@ impl CreatureView {
             lunge: c.lunge,
             mounted: c.mounted,
             flying: c.flying,
+            buried: c.buried,
             altitude: c.altitude,
             chasing: c.state == State::Chase,
             saddled: c.can_ride(),
@@ -230,6 +232,7 @@ impl CreatureView {
         c.mounted = self.mounted;
         c.flying = self.flying;
         c.altitude = self.altitude;
+        c.buried = self.buried;
         if self.chasing {
             c.state = State::Chase;
         }

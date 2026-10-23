@@ -594,7 +594,9 @@ fn draw_mount_bar(mount: &Creature) {
     draw_rectangle_lines(x, y, w, h, 1.0, BORDER);
     let load = format!("Carga {:.0}/{:.0}", mount.weight(), mount.max_weight());
     let color = if mount.overweight() { BAD } else { DIM };
-    shadowed(&load, x + w + 10.0, y + 10.0, 18.0, color);
+    // Logo depois do rótulo (que fica comprido com as dicas de Espaço).
+    let label_w = measure_text(&label, None, 18, 1.0).width;
+    shadowed(&load, x + label_w.max(w) + 16.0, y - 4.0, 18.0, color);
 }
 
 /// O que E / clique faz montado em `mount`.
@@ -1291,6 +1293,14 @@ pub fn draw_item_icon(item: ItemId, rect: Rect) {
                 p(8.0, -7.0),
                 Color::from_rgba(236, 226, 196, 255),
             );
+        }
+        ItemId::KangarooSaddle => {
+            let leather = Color::from_rgba(146, 96, 56, 255);
+            draw_ellipse(c.x, c.y, 14.0 * u, 8.0 * u, 0.0, leather);
+            rect_at(-10.0, -9.0, 6.0, 8.0, Color::from_rgba(178, 112, 66, 255));
+            line(p(-14.0, 0.0), p(14.0, 0.0), 2.0, Color::from_rgba(224, 186, 142, 255));
+            line(p(-4.0, 6.0), p(-6.0, 15.0), 2.0, wood_dark);
+            line(p(5.0, 6.0), p(7.0, 15.0), 2.0, wood_dark);
         }
         ItemId::MegalodonSaddle | ItemId::IchthyosaurSaddle | ItemId::MosasaurSaddle | ItemId::KrakenSaddle => {
             // Selas do mar: couro com fivelas e uma tira colorida por espécie.
